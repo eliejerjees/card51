@@ -265,6 +265,14 @@ button:disabled {
   user-select: none;
 }
 
+.card img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  border-radius: var(--card-radius);
+  object-fit: cover; /* safe for PNG; SVG will ignore */
+}
+
 .card.small {
   width: clamp(40px, 8vw, 55px);
   height: clamp(56px, 11.2vw, 77px);
@@ -282,79 +290,8 @@ button:disabled {
 }
 
 .card.face-down {
-  background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
+  background: transparent;
   cursor: default;
-}
-
-.card-back {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: clamp(2rem, 5vw, 3rem);
-  color: rgba(255, 255, 255, 0.3);
-}
-
-.card-face {
-  width: 100%;
-  height: 100%;
-  padding: clamp(4px, 1vw, 8px);
-  display: flex;
-  flex-direction: column;
-  position: relative;
-}
-
-.card-face.red {
-  color: var(--red-card);
-}
-
-.card-face.black {
-  color: var(--black-card);
-}
-
-.card-corner {
-  font-size: clamp(0.75rem, 2vw, 1rem);
-  font-weight: bold;
-  line-height: 1;
-}
-
-.card-corner.top-left {
-  position: absolute;
-  top: clamp(4px, 1vw, 6px);
-  left: clamp(4px, 1vw, 6px);
-}
-
-.card-corner.bottom-right {
-  position: absolute;
-  bottom: clamp(4px, 1vw, 6px);
-  right: clamp(4px, 1vw, 6px);
-  transform: rotate(180deg);
-}
-
-.card-center {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: clamp(1.5rem, 4vw, 2.5rem);
-  font-weight: bold;
-}
-
-.card-face.joker {
-  background: linear-gradient(135deg, #9333ea 0%, #c026d3 100%);
-  color: white;
-}
-
-.joker-badge {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: clamp(0.6rem, 1.5vw, 0.9rem);
-  font-weight: bold;
-  text-align: center;
 }
 
 /* ============================================================================

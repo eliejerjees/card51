@@ -1,4 +1,4 @@
-import { CardID, PlayerID } from "./types";
+import type { CardID, PlayerID } from "./types";
 
 export type Action =
   | { type: "DRAW_DECK"; player: PlayerID }

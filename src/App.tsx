@@ -4,6 +4,9 @@ import type { GameState, PlayerID, CardID, CardDTO, Meld } from "./engine/types"
 import type { Action } from "./engine/actions";
 import { initGame, applyAction } from "./engine/state";
 import { botStep } from "./engine/bot";
+import { cardAssetPath, cardBackAssetPath } from "./ui/cardAssets";
+
+
 
 
 // ============================================================================
@@ -23,10 +26,28 @@ function cardLabel(card: CardDTO): string {
 }
 
 function cardValue(card: CardDTO): number {
-  if (card.rank === 'JOKER') return 0;
-  if (['ACE', 'JACK', 'QUEEN', 'KING'].includes(card.rank)) return 10;
-  return parseInt(card.rank);
+  if (card.rank === "JOKER") return 0;
+
+  switch (card.rank) {
+    case "ACE":
+    case "KING":
+    case "QUEEN":
+    case "JACK":
+    case "TEN":
+      return 10;
+    case "TWO": return 2;
+    case "THREE": return 3;
+    case "FOUR": return 4;
+    case "FIVE": return 5;
+    case "SIX": return 6;
+    case "SEVEN": return 7;
+    case "EIGHT": return 8;
+    case "NINE": return 9;
+    default:
+      return 0;
+  }
 }
+
 
 function selectionPoints(selectedIds: CardID[], state: GameState): number {
   return selectedIds.reduce((sum, id) => sum + cardValue(state.cardsById[id]), 0);
@@ -71,32 +92,16 @@ interface CardViewProps {
 }
 
 function CardView({ card, selected, onClick, faceDown, size = "normal" }: CardViewProps) {
-  // when faceDown, we do not need a real card
-  if (faceDown) {
-    return (
-      <div className={`card ${selected ? "selected" : ""} face-down ${size}`} onClick={onClick}>
-        <div className="card-back">🂠</div>
-      </div>
-    );
-  }
-
-  if (!card) return null; // safety
-  const isRed = card.suit === "HEARTS" || card.suit === "DIAMONDS";
-  const isJoker = card.rank === "JOKER";
+  const src = faceDown
+    ? cardBackAssetPath()
+    : (card ? cardAssetPath(card) : "");
 
   return (
-    <div className={`card ${selected ? "selected" : ""} ${size}`} onClick={onClick}>
-      <div className={`card-face ${isRed ? "red" : "black"} ${isJoker ? "joker" : ""}`}>
-        {isJoker ? (
-          <div className="joker-badge">JOKER</div>
-        ) : (
-          <>
-            <div className="card-corner top-left">{cardLabel(card)}</div>
-            <div className="card-center">{cardLabel(card)}</div>
-            <div className="card-corner bottom-right">{cardLabel(card)}</div>
-          </>
-        )}
-      </div>
+    <div
+      className={`card ${selected ? "selected" : ""} ${faceDown ? "face-down" : ""} ${size}`}
+      onClick={onClick}
+    >
+      {src ? <img src={src} alt="" draggable={false} /> : null}
     </div>
   );
 }
@@ -369,9 +374,11 @@ function App() {
   
   const humanId: PlayerID = 0;
   
-  function cloneState(state: GameState): GameState {
-    return structuredClone ? structuredClone(state) : JSON.parse(JSON.stringify(state));
-  }
+function cloneState(state: GameState): GameState {
+  if (typeof structuredClone === "function") return structuredClone(state);
+  return JSON.parse(JSON.stringify(state)) as GameState;
+}
+
   
   function addLog(message: string) {
     setLogEntries(prev => [...prev.slice(-9), message]);
@@ -501,7 +508,7 @@ function App() {
         
         {gameState.phase === 'GAME_OVER' && (
           <div className="game-over">
-            🎉 Player {(gameState.winner || 0) + 1} Wins!
+            🎉 Player {(gameState.winner ?? 0) + 1} Wins!
           </div>
         )}
         
