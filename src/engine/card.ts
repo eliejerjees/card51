@@ -1,29 +1,33 @@
-// src/engine/Card.ts
+// src/engine/card.ts
 
-export enum Suit {
-  CLUBS = "CLUBS",
-  DIAMONDS = "DIAMONDS",
-  HEARTS = "HEARTS",
-  SPADES = "SPADES",
-  JOKER = "JOKER",
-}
+export const Suit = {
+  CLUBS: "CLUBS",
+  DIAMONDS: "DIAMONDS",
+  HEARTS: "HEARTS",
+  SPADES: "SPADES",
+  JOKER: "JOKER",
+} as const;
 
-export enum Rank {
-  TWO = "TWO",
-  THREE = "THREE",
-  FOUR = "FOUR",
-  FIVE = "FIVE",
-  SIX = "SIX",
-  SEVEN = "SEVEN",
-  EIGHT = "EIGHT",
-  NINE = "NINE",
-  TEN = "TEN",
-  JACK = "JACK",
-  QUEEN = "QUEEN",
-  KING = "KING",
-  ACE = "ACE",
-  JOKER = "JOKER",
-}
+export type Suit = typeof Suit[keyof typeof Suit];
+
+export const Rank = {
+  TWO: "TWO",
+  THREE: "THREE",
+  FOUR: "FOUR",
+  FIVE: "FIVE",
+  SIX: "SIX",
+  SEVEN: "SEVEN",
+  EIGHT: "EIGHT",
+  NINE: "NINE",
+  TEN: "TEN",
+  JACK: "JACK",
+  QUEEN: "QUEEN",
+  KING: "KING",
+  ACE: "ACE",
+  JOKER: "JOKER",
+} as const;
+
+export type Rank = typeof Rank[keyof typeof Rank];
 
 export class Card {
   public readonly suit: Suit;
