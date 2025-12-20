@@ -51,20 +51,20 @@ button:disabled {
 
 .app {
   min-height: 100vh;
-  padding: clamp(8px, 2vw, 16px);
-  display: flex;
-  justify-content: center;
-  align-items: center;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
 }
 
 .board {
   width: 100%;
-  max-width: 1400px;
+  height: 100%;
   background: radial-gradient(ellipse at center, var(--felt-light) 0%, var(--felt-green) 50%, var(--felt-dark) 100%);
-  border-radius: var(--border-radius);
-  padding: clamp(12px, 3vw, 24px);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), inset 0 1px 2px rgba(255, 255, 255, 0.1);
+  padding: clamp(8px, 1.5vh, 16px);
   position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
 }
 
 /* Game Header */
@@ -72,10 +72,11 @@ button:disabled {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: var(--spacing-md);
-  padding: var(--spacing-sm) var(--spacing-md);
+  margin-bottom: clamp(8px, 1vh, 12px);
+  padding: clamp(6px, 1vh, 12px) clamp(12px, 2vw, 20px);
   background: rgba(0, 0, 0, 0.3);
   border-radius: var(--card-radius);
+  flex-shrink: 0;
 }
 
 .game-title {
@@ -120,15 +121,16 @@ button:disabled {
 
 .game-over {
   text-align: center;
-  padding: var(--spacing-md);
+  padding: clamp(8px, 1.5vh, 16px);
   background: linear-gradient(135deg, var(--gold) 0%, #ffed4e 100%);
   color: #1a1a1a;
   font-size: clamp(1.25rem, 3vw, 1.75rem);
   font-weight: bold;
   border-radius: var(--card-radius);
-  margin-bottom: var(--spacing-md);
+  margin-bottom: clamp(6px, 1vh, 12px);
   box-shadow: 0 4px 16px rgba(255, 215, 0, 0.5);
   animation: pulse 2s infinite;
+  flex-shrink: 0;
 }
 
 @keyframes pulse {
@@ -140,11 +142,12 @@ button:disabled {
   background: rgba(220, 20, 60, 0.2);
   border: 2px solid #dc143c;
   color: #ff6b6b;
-  padding: var(--spacing-sm) var(--spacing-md);
+  padding: clamp(6px, 1vh, 10px) clamp(12px, 2vw, 16px);
   border-radius: var(--card-radius);
-  margin-bottom: var(--spacing-md);
+  margin-bottom: clamp(6px, 1vh, 12px);
   text-align: center;
   font-weight: 600;
+  flex-shrink: 0;
 }
 
 /* ============================================================================
@@ -152,25 +155,29 @@ button:disabled {
    ============================================================================ */
 
 .board-layout {
-  display: grid;
-  grid-template-rows: auto 1fr auto;
-  gap: var(--spacing-md);
-  min-height: 500px;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: clamp(8px, 1vh, 12px);
+  min-height: 0;
+  overflow: hidden;
 }
 
 .middle-row {
   display: grid;
   grid-template-columns: 1fr 2fr 1fr;
-  gap: var(--spacing-md);
+  gap: clamp(8px, 1vw, 16px);
   align-items: center;
+  flex: 1;
+  min-height: 0;
 }
 
 .center-area {
   display: flex;
   justify-content: center;
   align-items: center;
-  gap: var(--spacing-xl);
-  padding: var(--spacing-lg);
+  gap: clamp(16px, 3vw, 32px);
+  padding: clamp(8px, 2vh, 16px);
 }
 
 .seat-container {
@@ -186,7 +193,8 @@ button:disabled {
 .bottom-area {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-md);
+  gap: clamp(6px, 1vh, 12px);
+  flex-shrink: 0;
 }
 
 /* ============================================================================
@@ -254,8 +262,8 @@ button:disabled {
    ============================================================================ */
 
 .card {
-  width: clamp(50px, 10vw, 70px);
-  height: clamp(70px, 14vw, 98px);
+  width: clamp(35px, 4vw, 100px);
+  height: clamp(50px, 5.6vw, 150px);
   background: var(--card-bg);
   border-radius: var(--card-radius);
   box-shadow: 0 2px 8px var(--card-shadow);
@@ -270,12 +278,12 @@ button:disabled {
   height: 100%;
   display: block;
   border-radius: var(--card-radius);
-  object-fit: cover; /* safe for PNG; SVG will ignore */
+  object-fit: cover;
 }
 
 .card.small {
-  width: clamp(40px, 8vw, 55px);
-  height: clamp(56px, 11.2vw, 77px);
+  width: clamp(25px, 3vw, 38px);
+  height: clamp(35px, 4.2vw, 53px);
 }
 
 .card:hover:not(.face-down) {
@@ -294,25 +302,96 @@ button:disabled {
   cursor: default;
 }
 
+.card-back {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: clamp(2rem, 5vw, 3rem);
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.card-face {
+  width: 100%;
+  height: 100%;
+  padding: clamp(4px, 1vw, 8px);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.card-face.red {
+  color: var(--red-card);
+}
+
+.card-face.black {
+  color: var(--black-card);
+}
+
+.card-corner {
+  font-size: clamp(0.75rem, 2vw, 1rem);
+  font-weight: bold;
+  line-height: 1;
+}
+
+.card-corner.top-left {
+  position: absolute;
+  top: clamp(4px, 1vw, 6px);
+  left: clamp(4px, 1vw, 6px);
+}
+
+.card-corner.bottom-right {
+  position: absolute;
+  bottom: clamp(4px, 1vw, 6px);
+  right: clamp(4px, 1vw, 6px);
+  transform: rotate(180deg);
+}
+
+.card-center {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: clamp(1.5rem, 4vw, 2.5rem);
+  font-weight: bold;
+}
+
+.card-face.joker {
+  background: linear-gradient(135deg, #9333ea 0%, #c026d3 100%);
+  color: white;
+}
+
+.joker-badge {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: clamp(0.6rem, 1.5vw, 0.9rem);
+  font-weight: bold;
+  text-align: center;
+}
+
 /* ============================================================================
    HAND
    ============================================================================ */
 
 .hand {
-  padding: var(--spacing-md);
+  padding: clamp(8px, 1vh, 12px);
   background: rgba(0, 0, 0, 0.3);
   border-radius: var(--border-radius);
 }
 
 .hand-cards {
   display: flex;
-  gap: clamp(4px, 1vw, 8px);
+  gap: clamp(3px, 0.6vw, 6px);
   justify-content: center;
   flex-wrap: wrap;
-  max-height: 200px;
+  max-height: clamp(150px, 12vh, 170px);
   overflow-x: auto;
   overflow-y: hidden;
-  padding: var(--spacing-sm);
+  padding: clamp(4px, 0.5vh, 8px);
 }
 
 /* Scrollbar styling */
@@ -381,8 +460,8 @@ button:disabled {
 }
 
 .empty-pile {
-  width: clamp(50px, 10vw, 70px);
-  height: clamp(70px, 14vw, 98px);
+  width: clamp(35px, 4vw, 50px);
+  height: clamp(49px, 5.6vw, 70px);
   border: 2px dashed rgba(255, 255, 255, 0.3);
   border-radius: var(--card-radius);
   display: flex;
@@ -536,20 +615,21 @@ button:disabled {
 .log {
   background: rgba(0, 0, 0, 0.4);
   border-radius: var(--border-radius);
-  padding: var(--spacing-md);
-  margin-top: var(--spacing-md);
+  padding: clamp(8px, 1vh, 12px);
+  margin-top: clamp(6px, 1vh, 12px);
+  flex-shrink: 0;
 }
 
 .log-title {
   font-weight: bold;
-  margin-bottom: var(--spacing-sm);
+  margin-bottom: clamp(4px, 0.5vh, 8px);
   color: var(--gold);
   font-size: 0.875rem;
   text-transform: uppercase;
 }
 
 .log-entries {
-  max-height: 150px;
+  max-height: clamp(80px, 10vh, 120px);
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -604,17 +684,18 @@ button:disabled {
 
 @media (max-width: 600px) {
   .app {
-    padding: var(--spacing-xs);
+    overflow: hidden;
   }
   
   .board {
-    padding: var(--spacing-sm);
+    padding: clamp(4px, 1vh, 8px);
   }
   
   .game-header {
     flex-direction: column;
-    gap: var(--spacing-sm);
+    gap: clamp(4px, 0.5vh, 6px);
     text-align: center;
+    padding: clamp(4px, 1vh, 8px);
   }
   
   .game-controls {
@@ -628,26 +709,26 @@ button:disabled {
   }
   
   .board-layout {
-    gap: var(--spacing-sm);
+    gap: clamp(4px, 0.8vh, 8px);
   }
   
   .center-area {
     flex-direction: column;
-    gap: var(--spacing-sm);
-    padding: var(--spacing-sm);
+    gap: clamp(6px, 1vh, 10px);
+    padding: clamp(4px, 1vh, 8px);
   }
   
   .pile {
     min-width: 100px;
-    padding: var(--spacing-sm);
+    padding: clamp(4px, 1vh, 8px);
   }
   
   .top-seat .player-seat {
-    padding: var(--spacing-sm);
+    padding: clamp(4px, 1vh, 8px);
   }
   
   .hand {
-    padding: var(--spacing-sm);
+    padding: clamp(4px, 1vh, 8px);
   }
   
   .hand-cards {
@@ -664,11 +745,11 @@ button:disabled {
   }
   
   .controls {
-    padding: var(--spacing-sm);
+    padding: clamp(6px, 1vh, 10px);
   }
   
   .log-entries {
-    max-height: 100px;
+    max-height: clamp(60px, 8vh, 100px);
   }
 }
 
