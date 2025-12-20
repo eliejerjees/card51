@@ -5,10 +5,12 @@
 
 import { Card, Rank, Suit } from "./card";
 
-export enum AceMode {
-  LOW = "LOW",
-  HIGH = "HIGH",
-}
+export const AceMode = {
+  LOW: "LOW",
+  HIGH: "HIGH",
+} as const;
+
+export type AceMode = typeof AceMode[keyof typeof AceMode];
 
 export class GroupValidator {
   public static isValidSet(cards: ReadonlyArray<Card>): boolean {

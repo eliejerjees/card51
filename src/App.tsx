@@ -1,247 +1,582 @@
-import { useMemo, useState } from "react";
-import "./app.css";
-import { WebGame } from "./engine/webGame";
-import type { CandidateGroup } from "./engine/webGame";
-import { Card } from "./engine/card";
+import React, { useState, useEffect } from 'react';
+import './app.css';
+import type { GameState, PlayerID, CardID, CardDTO, Meld } from "./engine/types";
+import type { Action } from "./engine/actions";
+import { initGame, applyAction } from "./engine/state";
+import { botStep } from "./engine/bot";
 
-function cardKey(c: Card): string {
-  // Works because each Card is a unique object in your deck.
-  return `${c.rank}_${c.suit}_${(c as any).__id ?? ""}`; // fallback
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+function cardLabel(card: CardDTO): string {
+  if (card.rank === 'JOKER') return 'JOKER';
+  const suitSymbols: Record<string, string> = {
+    SPADES: '♠', HEARTS: '♥', DIAMONDS: '♦', CLUBS: '♣'
+  };
+  const rankLabels: Record<string, string> = {
+    ACE: 'A', JACK: 'J', QUEEN: 'Q', KING: 'K'
+  };
+  const rankLabel = rankLabels[card.rank] || card.rank;
+  return `${rankLabel}${suitSymbols[card.suit] || ''}`;
 }
 
-function cardLabel(c: Card): string {
-  return c.isJoker() ? "JOKER" : `${c.rank} ${c.suit}`;
+function cardValue(card: CardDTO): number {
+  if (card.rank === 'JOKER') return 0;
+  if (['ACE', 'JACK', 'QUEEN', 'KING'].includes(card.rank)) return 10;
+  return parseInt(card.rank);
 }
 
-export default function App() {
-  const [game, setGame] = useState(() => new WebGame(2));
-  const [selected, setSelected] = useState<Card[]>([]);
-  const [msg, setMsg] = useState<string>("");
+function selectionPoints(selectedIds: CardID[], state: GameState): number {
+  return selectedIds.reduce((sum, id) => sum + cardValue(state.cardsById[id]), 0);
+}
 
-  const p = game.currentPlayer();
-  const hand = p.getHand();
+function isValidSet(cardIds: CardID[], state: GameState): boolean {
+  if (cardIds.length < 3 || cardIds.length > 4) return false;
+  const cards = cardIds.map(id => state.cardsById[id]);
+  const nonJokers = cards.filter(c => c.rank !== 'JOKER');
+  if (nonJokers.length === 0) return false;
+  const rank = nonJokers[0].rank;
+  if (!nonJokers.every(c => c.rank === rank)) return false;
+  const suits = nonJokers.map(c => c.suit);
+  return new Set(suits).size === suits.length;
+}
 
-  const selectedSet = useMemo(() => new Set(selected), [selected]);
+function isValidRun(cardIds: CardID[], state: GameState): boolean {
+  if (cardIds.length < 3) return false;
+  const cards = cardIds.map(id => state.cardsById[id]);
+  const nonJokers = cards.filter(c => c.rank !== 'JOKER');
+  if (nonJokers.length === 0) return false;
+  const suit = nonJokers[0].suit;
+  if (!nonJokers.every(c => c.suit === suit)) return false;
+  // Simplified run check - engine does full validation
+  return true;
+}
 
-  function toggleCard(c: Card) {
-    setSelected((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]));
+function isValidMeld(cardIds: CardID[], state: GameState): boolean {
+  return isValidSet(cardIds, state) || isValidRun(cardIds, state);
+}
+
+// ============================================================================
+// COMPONENTS
+// ============================================================================
+
+interface CardViewProps {
+  card?: CardDTO;              // was CardDTO
+  selected?: boolean;
+  onClick?: () => void;
+  faceDown?: boolean;
+  size?: "small" | "normal";
+}
+
+function CardView({ card, selected, onClick, faceDown, size = "normal" }: CardViewProps) {
+  // when faceDown, we do not need a real card
+  if (faceDown) {
+    return (
+      <div className={`card ${selected ? "selected" : ""} face-down ${size}`} onClick={onClick}>
+        <div className="card-back">🂠</div>
+      </div>
+    );
   }
 
-  function resetSelection() {
-    setSelected([]);
-  }
-
-  const openCandidates = useMemo(() => game.getOpenCandidates(), [game, hand.length, game.lastDrawn]);
-  const postOpenCandidates = useMemo(() => game.getPostOpenCandidates(), [game, hand.length, game.lastDrawn]);
-
-  function pickExactCandidate(groups: CandidateGroup[]): CandidateGroup | null {
-    // match selection by reference equality
-    for (const g of groups) {
-      if (g.cards.length !== selected.length) continue;
-      const all = g.cards.every((c) => selectedSet.has(c));
-      if (all) return g;
-    }
-    return null;
-  }
+  if (!card) return null; // safety
+  const isRed = card.suit === "HEARTS" || card.suit === "DIAMONDS";
+  const isJoker = card.rank === "JOKER";
 
   return (
-    <div className="wrap">
-      <header className="top">
-        <div className="title">Card 51 (Web)</div>
-        <div className="status">
-          <div><b>Player:</b> {game.turn + 1}</div>
-          <div><b>Phase:</b> {game.phase}</div>
-          <div><b>Opened:</b> {p.hasOpened() ? "Yes" : "No"}</div>
-          <div><b>Discard top:</b> {game.discardTop() ? cardLabel(game.discardTop()!) : "empty"}</div>
-          <div><b>Last drawn:</b> {game.lastDrawn ? cardLabel(game.lastDrawn) : "-"}</div>
-        </div>
-
-        <div className="actions">
-          <button
-            onClick={() => {
-              setGame(new WebGame(2));
-              resetSelection();
-              setMsg("");
-            }}
-          >
-            New Game
-          </button>
-
-          <button
-            disabled={game.phase !== "DRAW"}
-            onClick={() => {
-              const r = game.draw("DECK");
-              setMsg(r.message ?? "");
-              setGame(Object.assign(Object.create(Object.getPrototypeOf(game)), game));
-              resetSelection();
-            }}
-          >
-            Draw Deck
-          </button>
-
-          <button
-            disabled={game.phase !== "DRAW"}
-            onClick={() => {
-              const r = game.draw("DISCARD");
-              setMsg(r.message ?? "");
-              setGame(Object.assign(Object.create(Object.getPrototypeOf(game)), game));
-              resetSelection();
-            }}
-          >
-            Draw Discard
-          </button>
-
-          <button
-            disabled={!(game.phase === "OPEN_OR_MELD" || game.phase === "POST_OPEN_MELD")}
-            onClick={() => {
-              game.skipMeld();
-              setMsg("");
-              setGame(Object.assign(Object.create(Object.getPrototypeOf(game)), game));
-              resetSelection();
-            }}
-          >
-            Skip Meld
-          </button>
-
-          <button
-            disabled={game.phase !== "OPEN_OR_MELD" || selected.length < 3}
-            onClick={() => {
-              const cand = pickExactCandidate(openCandidates);
-              if (!cand) {
-                setMsg("Selection is not an openable group (must include drawn card and be 51+).");
-                return;
-              }
-              const r = game.openWith(cand.cards);
-              setMsg(r.message ?? "");
-              setGame(Object.assign(Object.create(Object.getPrototypeOf(game)), game));
-              resetSelection();
-            }}
-          >
-            Open (select exact openable group)
-          </button>
-
-          <button
-            disabled={game.phase !== "POST_OPEN_MELD" || selected.length < 3}
-            onClick={() => {
-              // allow laying any valid meld; we still check validity inside engine
-              const r = game.layMeld([...selected]);
-              setMsg(r.message ?? "");
-              setGame(Object.assign(Object.create(Object.getPrototypeOf(game)), game));
-              resetSelection();
-            }}
-          >
-            Lay Meld (select cards)
-          </button>
-
-          <button
-            disabled={game.phase !== "DISCARD" || selected.length !== 1}
-            onClick={() => {
-              const r = game.discard(selected[0]);
-              setMsg(r.message ?? "");
-              setGame(Object.assign(Object.create(Object.getPrototypeOf(game)), game));
-              resetSelection();
-            }}
-          >
-            Discard (select 1)
-          </button>
-        </div>
-
-        {msg && <div className="msg">{msg}</div>}
-
-        {game.winner !== null && (
-          <div className="winner">
-            Winner: <b>Player {game.winner + 1}</b>
-          </div>
+    <div className={`card ${selected ? "selected" : ""} ${size}`} onClick={onClick}>
+      <div className={`card-face ${isRed ? "red" : "black"} ${isJoker ? "joker" : ""}`}>
+        {isJoker ? (
+          <div className="joker-badge">JOKER</div>
+        ) : (
+          <>
+            <div className="card-corner top-left">{cardLabel(card)}</div>
+            <div className="card-center">{cardLabel(card)}</div>
+            <div className="card-corner bottom-right">{cardLabel(card)}</div>
+          </>
         )}
-      </header>
-
-      <main className="grid">
-        <section className="panel">
-          <h2>Your Hand (click to select)</h2>
-          <div className="hand">
-            {hand.map((c, idx) => {
-              const sel = selectedSet.has(c);
-              return (
-                <button
-                  key={idx}
-                  className={`card ${sel ? "sel" : ""} ${c.isJoker() ? "joker" : ""}`}
-                  onClick={() => toggleCard(c)}
-                >
-                  {cardLabel(c)}
-                </button>
-              );
-            })}
-          </div>
-        </section>
-
-        <section className="panel">
-          <h2>Groups on Table</h2>
-          <div className="groups">
-            {p.getGroups().length === 0 ? (
-              <div className="muted">No groups laid yet.</div>
-            ) : (
-              p.getGroups().map((g, i) => (
-                <div key={i} className="group">
-                  <div className="groupHead">
-                    <span className="muted">points:</span> {g.reduce((s, c) => s + c.getValue(), 0)}
-                  </div>
-                  <div className="groupRow">
-                    {g.map((c, j) => (
-                      <span key={j} className={`chip ${c.isJoker() ? "joker" : ""}`}>
-                        {cardLabel(c)}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </section>
-
-        <section className="panel">
-          <h2>Hints</h2>
-
-          {game.phase === "OPEN_OR_MELD" && !p.hasOpened() && (
-            <>
-              <div className="muted">Openable groups (must include drawn card, 51+ points):</div>
-              <div className="cand">
-                {openCandidates.length === 0 ? (
-                  <div className="muted">None.</div>
-                ) : (
-                  openCandidates.slice(0, 12).map((g, i) => (
-                    <div key={i} className="candItem">
-                      <b>{g.points}</b> ({g.kind}{g.mode ? ` ${g.mode}` : ""}):{" "}
-                      {g.cards.map(cardLabel).join(", ")}
-                    </div>
-                  ))
-                )}
-              </div>
-            </>
-          )}
-
-          {game.phase === "POST_OPEN_MELD" && p.hasOpened() && (
-            <>
-              <div className="muted">Possible melds (showing up to 12):</div>
-              <div className="cand">
-                {postOpenCandidates.length === 0 ? (
-                  <div className="muted">None.</div>
-                ) : (
-                  postOpenCandidates.slice(0, 12).map((g, i) => (
-                    <div key={i} className="candItem">
-                      <b>{g.points}</b> ({g.kind}{g.mode ? ` ${g.mode}` : ""}):{" "}
-                      {g.cards.map(cardLabel).join(", ")}
-                    </div>
-                  ))
-                )}
-              </div>
-            </>
-          )}
-
-          <div className="muted" style={{ marginTop: 10 }}>
-            Rule enforced: you can draw from discard only after opening.
-          </div>
-        </section>
-      </main>
+      </div>
     </div>
   );
 }
+
+interface HandProps {
+  cardIds: CardID[];
+  state: GameState;
+  selectedIds: Set<CardID>;
+  onToggleCard: (id: CardID) => void;
+}
+
+function Hand({ cardIds, state, selectedIds, onToggleCard }: HandProps) {
+  return (
+    <div className="hand">
+      <div className="hand-cards">
+        {cardIds.map(id => (
+          <CardView
+            key={id}
+            card={state.cardsById[id]}
+            selected={selectedIds.has(id)}
+            onClick={() => onToggleCard(id)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+interface PileViewProps {
+  type: 'deck' | 'discard';
+  count?: number;
+  topCardId?: CardID;
+  state: GameState;
+  onDraw?: () => void;
+}
+
+function PileView({ type, count = 0, topCardId, state, onDraw }: PileViewProps) {
+  return (
+    <div className={`pile ${type}`} onClick={onDraw}>
+      <div className="pile-label">{type === 'deck' ? 'Draw Pile' : 'Discard'}</div>
+      {type === 'deck' ? (
+        <div className="pile-cards">
+          <CardView faceDown />
+          <div className="pile-count">{count}</div>
+        </div>
+      ) : topCardId ? (
+        <CardView card={state.cardsById[topCardId]} />
+      ) : (
+        <div className="empty-pile">Empty</div>
+      )}
+    </div>
+  );
+}
+
+interface MeldZoneProps {
+  melds: Meld[];
+  state: GameState;
+  owner: PlayerID;
+}
+
+function MeldZone({ melds, state, owner }: MeldZoneProps) {
+  const playerMelds = melds.filter(m => m.owner === owner);
+  
+  if (playerMelds.length === 0) return null;
+  
+  return (
+    <div className="meld-zone">
+      {playerMelds.map(meld => {
+        const points = meld.cardIds.reduce((sum, id) => sum + cardValue(state.cardsById[id]), 0);
+        return (
+          <div key={meld.id} className="meld">
+            <div className="meld-cards">
+              {meld.cardIds.map(id => (
+                <CardView key={id} card={state.cardsById[id]} size="small" />
+              ))}
+            </div>
+            <div className="meld-points">{points} pts</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+interface PlayerSeatProps {
+  position: 'bottom' | 'left' | 'top' | 'right';
+  playerId: PlayerID;
+  state: GameState;
+  isCurrent: boolean;
+  isHuman?: boolean;
+}
+
+function PlayerSeat({ position, playerId, state, isCurrent, isHuman }: PlayerSeatProps) {
+  const player = state.playersPublic[playerId];
+  const opened = player.opened;
+  
+  return (
+    <div className={`player-seat ${position} ${isCurrent ? 'current' : ''}`}>
+      <div className="seat-info">
+        <div className="player-label">
+          {isHuman ? 'You' : `Player ${playerId + 1}`}
+          {opened && <span className="opened-badge">✓ Opened</span>}
+        </div>
+        {!isHuman && (
+          <div className="opponent-hand">
+            <CardView faceDown size="small" />
+            <span className="hand-count">×{player.handCount}</span>
+          </div>
+        )}
+      </div>
+      <MeldZone melds={state.tableMelds} state={state} owner={playerId} />
+    </div>
+  );
+}
+
+interface ControlsProps {
+  state: GameState;
+  selectedIds: Set<CardID>;
+  onDrawDeck: () => void;
+  onDrawDiscard: () => void;
+  onOpen: () => void;
+  onLayMeld: () => void;
+  onPass: () => void;
+  onDiscard: () => void;
+}
+
+function Controls({
+  state,
+  selectedIds,
+  onDrawDeck,
+  onDrawDiscard,
+  onOpen,
+  onLayMeld,
+  onPass,
+  onDiscard
+}: ControlsProps) {
+  const phase = state.phase;
+  const humanId: PlayerID = 0;
+  const isHumanTurn = state.currentTurn === humanId;
+  const humanOpened = state.playersPublic[humanId].opened;
+  const selection = Array.from(selectedIds);
+  const points = selectionPoints(selection, state);
+  const includesDrawn = state.lastDrawnCardId && selectedIds.has(state.lastDrawnCardId);
+  const validMeld = selection.length >= 3 && isValidMeld(selection, state);
+  
+  if (!isHumanTurn || state.phase === 'GAME_OVER') {
+    return null;
+  }
+  
+  return (
+    <div className="controls">
+      <div className="phase-indicator">
+        Phase: <strong>{phase}</strong>
+      </div>
+      
+      {phase === 'DRAW' && (
+        <div className="action-buttons">
+          <button onClick={onDrawDeck} className="btn-primary">Draw from Deck</button>
+          <button onClick={onDrawDiscard} className="btn-secondary">
+            Draw from Discard {!humanOpened && '(must open first)'}
+          </button>
+        </div>
+      )}
+      
+      {phase === 'ACTION' && (
+        <div className="action-buttons">
+          {!humanOpened && (
+            <button
+              onClick={onOpen}
+              disabled={!validMeld || points < 51 || !includesDrawn}
+              className="btn-primary"
+              title={!validMeld ? 'Invalid meld' : points < 51 ? 'Need 51+ points' : !includesDrawn ? 'Must include drawn card' : ''}
+            >
+              Open ({points} pts)
+            </button>
+          )}
+          {humanOpened && (
+            <button
+              onClick={onLayMeld}
+              disabled={!validMeld}
+              className="btn-primary"
+              title={!validMeld ? 'Invalid meld' : ''}
+            >
+              Lay Meld ({points} pts)
+            </button>
+          )}
+          <button onClick={onPass} className="btn-secondary">Pass</button>
+        </div>
+      )}
+      
+      {phase === 'DISCARD' && (
+        <div className="action-buttons">
+          <button
+            onClick={onDiscard}
+            disabled={selectedIds.size !== 1}
+            className="btn-primary"
+          >
+            Discard {selectedIds.size !== 1 && '(select 1 card)'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface LogProps {
+  entries: string[];
+}
+
+function Log({ entries }: LogProps) {
+  return (
+    <div className="log">
+      <div className="log-title">Game Log</div>
+      <div className="log-entries">
+        {entries.map((entry, idx) => (
+          <div key={idx} className="log-entry">{entry}</div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+interface HintsProps {
+  state: GameState;
+  selectedIds: Set<CardID>;
+}
+
+function Hints({ state, selectedIds }: HintsProps) {
+  const [expanded, setExpanded] = useState(false);
+  const selection = Array.from(selectedIds);
+  
+  if (selection.length === 0) return null;
+  
+  const points = selectionPoints(selection, state);
+  const validSet = isValidSet(selection, state);
+  const validRun = isValidRun(selection, state);
+  const includesDrawn = state.lastDrawnCardId && selectedIds.has(state.lastDrawnCardId);
+  const canOpen = points >= 51 && includesDrawn && (validSet || validRun);
+  
+  return (
+    <div className="hints">
+      <button onClick={() => setExpanded(!expanded)} className="hints-toggle">
+        {expanded ? '▼' : '▶'} Show Hints
+      </button>
+      {expanded && (
+        <div className="hints-content">
+          <div>Selected: {selection.length} cards</div>
+          <div>Total Points: {points}</div>
+          <div>Valid Set: {validSet ? '✓' : '✗'}</div>
+          <div>Valid Run: {validRun ? '✓' : '✗'}</div>
+          <div>Includes Drawn Card: {includesDrawn ? '✓' : '✗'}</div>
+          <div>Can Open: {canOpen ? '✓ YES' : '✗ NO'}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
+// MAIN APP
+// ============================================================================
+
+function App() {
+  const [numPlayers, setNumPlayers] = useState<2 | 3 | 4>(2);
+  const [gameState, setGameState] = useState<GameState>(() => initGame(numPlayers));
+  const [selectedIds, setSelectedIds] = useState<Set<CardID>>(new Set());
+  const [logEntries, setLogEntries] = useState<string[]>([]);
+  const [error, setError] = useState<string>('');
+  const [botProcessing, setBotProcessing] = useState(false);
+  
+  const humanId: PlayerID = 0;
+  
+  function cloneState(state: GameState): GameState {
+    return structuredClone ? structuredClone(state) : JSON.parse(JSON.stringify(state));
+  }
+  
+  function addLog(message: string) {
+    setLogEntries(prev => [...prev.slice(-9), message]);
+  }
+  
+  function handleAction(action: Action, description: string) {
+    const newState = cloneState(gameState);
+    const result = applyAction(newState, action);
+    
+    if (result.ok) {
+      setGameState(newState);
+      setSelectedIds(new Set());
+      setError('');
+      addLog(description);
+    } else {
+      setError(result.error || 'Action failed');
+      addLog(`❌ ${result.error || 'Action failed'}`);
+    }
+  }
+  
+  function handleDrawDeck() {
+    handleAction({ type: 'DRAW_DECK', player: humanId }, 'You drew from deck');
+  }
+  
+  function handleDrawDiscard() {
+    handleAction({ type: 'DRAW_DISCARD', player: humanId }, 'You drew from discard');
+  }
+  
+  function handleOpen() {
+    handleAction(
+      { type: 'OPEN_GROUP', player: humanId, cardIds: Array.from(selectedIds) },
+      'You opened!'
+    );
+  }
+  
+  function handleLayMeld() {
+    handleAction(
+      { type: 'LAY_MELD', player: humanId, cardIds: Array.from(selectedIds) },
+      'You laid a meld'
+    );
+  }
+  
+  function handlePass() {
+    handleAction({ type: 'PASS_ACTION', player: humanId }, 'You passed');
+  }
+  
+  function handleDiscard() {
+    if (selectedIds.size !== 1) return;
+    handleAction(
+      { type: 'DISCARD', player: humanId, cardId: Array.from(selectedIds) },
+      'You discarded'
+    );
+  }
+  
+  function handleNewGame() {
+    setGameState(initGame(numPlayers));
+    setSelectedIds(new Set());
+    setLogEntries([]);
+    setError('');
+    addLog(`New game started with ${numPlayers} players`);
+  }
+  
+  function toggleCard(id: CardID) {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+  
+  // Auto-play bots
+  useEffect(() => {
+    if (gameState.phase === 'GAME_OVER' || botProcessing) return;
+    
+    const currentPlayer = gameState.currentTurn;
+    if (currentPlayer === humanId) return;
+    
+    setBotProcessing(true);
+    
+    const processBotTurn = async () => {
+      let state = cloneState(gameState);
+      
+      while (state.currentTurn !== humanId && state.phase !== 'GAME_OVER') {
+        await new Promise(resolve => setTimeout(resolve, 400));
+        
+        const result = botStep(state, state.currentTurn);
+        if (!result.ok) {
+          addLog(`Bot ${state.currentTurn + 1} error: ${result.error}`);
+          break;
+        }
+        
+        state = cloneState(state);
+      }
+      
+      setGameState(state);
+      setBotProcessing(false);
+    };
+    
+    processBotTurn();
+  }, [gameState.currentTurn, gameState.phase, humanId, botProcessing]);
+  
+  const humanHand = gameState.playersPrivate[humanId].hand;
+  const topDiscardId = gameState.discard[gameState.discard.length - 1];
+  
+  return (
+    <div className="app">
+      <div className="board">
+        <div className="game-header">
+          <div className="game-title">Card 51</div>
+          <div className="game-controls">
+            <select
+              value={numPlayers}
+              onChange={e => setNumPlayers(parseInt(e.target.value) as 2 | 3 | 4)}
+              disabled={gameState.phase !== 'GAME_OVER' && gameState.currentTurn !== 0}
+            >
+              <option value={2}>2 Players</option>
+              <option value={3}>3 Players</option>
+              <option value={4}>4 Players</option>
+            </select>
+            <button onClick={handleNewGame} className="btn-new-game">New Game</button>
+          </div>
+        </div>
+        
+        {gameState.phase === 'GAME_OVER' && (
+          <div className="game-over">
+            🎉 Player {(gameState.winner || 0) + 1} Wins!
+          </div>
+        )}
+        
+        {error && <div className="error-message">{error}</div>}
+        
+        <div className="board-layout">
+          {/* Top player */}
+          {numPlayers >= 3 && (
+            <div className="seat-container top-seat">
+              <PlayerSeat position="top" playerId={2} state={gameState} isCurrent={gameState.currentTurn === 2} />
+            </div>
+          )}
+          
+          <div className="middle-row">
+            {/* Left player */}
+            <div className="seat-container left-seat">
+              <PlayerSeat position="left" playerId={1} state={gameState} isCurrent={gameState.currentTurn === 1} />
+            </div>
+            
+            {/* Center piles */}
+            <div className="center-area">
+              <PileView
+                type="deck"
+                count={gameState.deckCount}
+                state={gameState}
+                onDraw={gameState.currentTurn === humanId && gameState.phase === 'DRAW' ? handleDrawDeck : undefined}
+              />
+              <PileView
+                type="discard"
+                topCardId={topDiscardId}
+                state={gameState}
+                onDraw={gameState.currentTurn === humanId && gameState.phase === 'DRAW' ? handleDrawDiscard : undefined}
+              />
+            </div>
+            
+            {/* Right player */}
+            {numPlayers >= 4 && (
+              <div className="seat-container right-seat">
+                <PlayerSeat position="right" playerId={3} state={gameState} isCurrent={gameState.currentTurn === 3} />
+              </div>
+            )}
+          </div>
+          
+          {/* Bottom player (human) */}
+          <div className="bottom-area">
+            <div className="seat-container bottom-seat">
+              <PlayerSeat position="bottom" playerId={0} state={gameState} isCurrent={gameState.currentTurn === 0} isHuman />
+            </div>
+            
+            <Controls
+              state={gameState}
+              selectedIds={selectedIds}
+              onDrawDeck={handleDrawDeck}
+              onDrawDiscard={handleDrawDiscard}
+              onOpen={handleOpen}
+              onLayMeld={handleLayMeld}
+              onPass={handlePass}
+              onDiscard={handleDiscard}
+            />
+            
+            <Hand
+              cardIds={humanHand}
+              state={gameState}
+              selectedIds={selectedIds}
+              onToggleCard={toggleCard}
+            />
+            
+            <Hints state={gameState} selectedIds={selectedIds} />
+          </div>
+        </div>
+        
+        <Log entries={logEntries} />
+      </div>
+    </div>
+  );
+}
+
+export default App;
