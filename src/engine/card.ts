@@ -33,7 +33,7 @@ export class Card {
   public readonly suit: Suit;
   public readonly rank: Rank;
 
-  constructor(suit: Suit, rank: Rank) {
+  constructor(suit: Suit, rank: Rank,) {
     this.suit = suit;
     this.rank = rank;
   }

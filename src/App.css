@@ -388,6 +388,13 @@ button:disabled {
   border-radius: var(--border-radius);
 }
 
+.hand-toolbar {
+  display: flex;
+  gap: var(--spacing-sm);
+  justify-content: center;
+  margin-bottom: var(--spacing-sm);
+}
+
 .hand-cards {
   display: flex;
   gap: clamp(3px, 0.6vw, 6px);
@@ -506,6 +513,16 @@ button:disabled {
   font-size: 0.75rem;
   font-weight: bold;
   color: var(--gold);
+}
+
+.meld-selected {
+  outline: 2px solid var(--gold);
+  box-shadow: 0 0 10px rgba(255, 215, 0, 0.4);
+}
+
+.meld-card-selected {
+  outline: 2px solid #2ecc71;
+  border-radius: 6px;
 }
 
 /* ============================================================================
@@ -818,4 +835,40 @@ button:focus-visible,
 select:focus-visible {
   outline: 3px solid var(--gold);
   outline-offset: 2px;
+}
+
+/* ============================================================================
+   Grouping Buttons
+   ============================================================================ */
+
+   .open-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px;
+  background: rgba(0,0,0,0.25);
+  border-radius: 8px;
+}
+
+.open-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 8px;
+}
+
+.open-group-cards {
+  display: flex;
+  gap: 4px;
+}
+
+.open-group-remove {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.15);
+  color: white;
+  font-weight: 700;
 }

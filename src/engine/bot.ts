@@ -25,25 +25,38 @@ export function botStep(state: GameState, botId: PlayerID): { ok: boolean; error
 
   // 2) ACTION: try to open if not opened, else try best meld, else pass
   if (state.phase === "ACTION") {
+    // inside ACTION phase
     const opened = state.playersPublic[botId].opened;
+    const last = state.lastDrawnCardId;
 
-    const candidates: Card[][] = [
-      ...GameUtils.findSets(handCards),
-      ...GameUtils.findRuns(handCards, AceMode.LOW),
-      ...GameUtils.findRuns(handCards, AceMode.HIGH),
-    ];
+    const melds = GameUtils.findValidMeldsById(handIds, state.cardsById);
 
-    // map candidate Card[] back to ids by matching (suit, rank) is ambiguous with duplicates
-    // v1 workaround: choose by indices from hand order (works because we operate on handIds directly)
-    // Better approach later: carry ids in parallel when generating groups.
-    // For v1 bot, just PASS unless you implement id-aware group generation.
+    // helper points
+    const points = (ids: string[]) =>
+      ids.reduce((s, id) => s + toCard(state, id).getValue(), 0);
+
     if (!opened) {
-      // open requires lastDrawn included and 51+
-      // v1: skip opening to keep bot simple
-      return applyAction(state, { type: "PASS_ACTION", player: botId });
+      if (!last) return applyAction(state, { type: "PASS_ACTION", player: botId });
+
+      const openCandidates = melds
+        .filter((m) => m.includes(last))
+        .filter((m) => points(m) >= 51);
+
+      if (openCandidates.length === 0) {
+        return applyAction(state, { type: "PASS_ACTION", player: botId });
+      }
+
+      // pick best (highest points)
+      openCandidates.sort((a, b) => points(b) - points(a));
+      return applyAction(state, { type: "OPEN_GROUP", player: botId, cardIds: openCandidates[0] });
     } else {
-      return applyAction(state, { type: "PASS_ACTION", player: botId });
+      if (melds.length === 0) return applyAction(state, { type: "PASS_ACTION", player: botId });
+
+      // pick a "best" meld: largest size then highest points
+      melds.sort((a, b) => (b.length - a.length) || (points(b) - points(a)));
+      return applyAction(state, { type: "LAY_MELD", player: botId, cardIds: melds[0] });
     }
+
   }
 
   // 3) DISCARD: discard highest value to move toward empty hand later
