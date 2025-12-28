@@ -1148,7 +1148,7 @@ function App() {
               onToggleCard={toggleCard}
             />
             
-            <Hints state={gameState} selectedIds={selectedIds} />
+            {/*<Hints state={gameState} selectedIds={selectedIds} />*/}
           </div>
         </div>
         
