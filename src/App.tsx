@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import './app.css';
+import './App.css';
 import type { GameState, PlayerID, CardID, CardDTO, Meld } from "./engine/types";
 import type { Action } from "./engine/actions";
 import { initGame, applyAction } from "./engine/state";
