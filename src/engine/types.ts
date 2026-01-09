@@ -27,7 +27,7 @@ export type Meld = {
   owner: PlayerID;
   cardIds: CardID[];
   kind: meldKind;
-  aceMode: AceMode;
+  aceMode?: AceMode;
   jokerMap: Record<CardID, { suit: Suit; rank: Rank }>;
 };
 
