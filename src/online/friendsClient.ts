@@ -8,6 +8,9 @@ async function requestLobby(path: string, init?: RequestInit): Promise<LobbySnap
     ...init,
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
+  if (!response.headers.get("content-type")?.includes("application/json")) {
+    throw new Error("The lobby request failed (server unavailable).");
+  }
   const payload = await response.json() as Partial<LobbyResponse> & { error?: string };
   if (!response.ok || !payload.lobby) throw new Error(payload.error || "The lobby request failed.");
   return payload.lobby;
