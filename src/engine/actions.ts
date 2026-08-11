@@ -1,5 +1,5 @@
-import type { AceMode, CardID, MeldKind, PlayerID } from "./types";
-import type { JokerRep } from "./groupValidator";
+import type { AceMode, CardID, MeldKind, PlayerID } from "./types.js";
+import type { JokerRep } from "./groupValidator.js";
 
 export type MeldProposal = {
   cardIds: CardID[];

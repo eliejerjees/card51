@@ -1,6 +1,6 @@
-import { Rank, STANDARD_RANKS, STANDARD_SUITS, type Suit } from "./card";
-import { AceMode, GroupValidator, type MeldValidation } from "./groupValidator";
-import type { AceMode as AceModeType, CardDTO, CardID, MeldKind } from "./types";
+import { Rank, STANDARD_RANKS, STANDARD_SUITS, type Suit } from "./card.js";
+import { AceMode, GroupValidator, type MeldValidation } from "./groupValidator.js";
+import type { AceMode as AceModeType, CardDTO, CardID, MeldKind } from "./types.js";
 
 export type MeldCandidate = {
   cardIds: CardID[];

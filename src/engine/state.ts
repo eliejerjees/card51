@@ -1,9 +1,9 @@
-import type { Action, MeldInput, MeldProposal } from "./actions";
-import { makeShuffledDeck, secureRandom, shuffleInPlace } from "./deckFactory";
-import { GroupValidator } from "./groupValidator";
-import { validateStateInvariants } from "./invariants";
-import { canTakeDiscardForOpening } from "./opening";
-import type { CardID, GameEventType, GameState, Meld, PlayerID } from "./types";
+import type { Action, MeldInput, MeldProposal } from "./actions.js";
+import { makeShuffledDeck, secureRandom, shuffleInPlace } from "./deckFactory.js";
+import { GroupValidator } from "./groupValidator.js";
+import { validateStateInvariants } from "./invariants.js";
+import { canTakeDiscardForOpening } from "./opening.js";
+import type { CardID, GameEventType, GameState, Meld, PlayerID } from "./types.js";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 

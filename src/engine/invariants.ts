@@ -1,5 +1,5 @@
-import { GroupValidator } from "./groupValidator";
-import type { CardID, GameState } from "./types";
+import { GroupValidator } from "./groupValidator.js";
+import type { CardID, GameState } from "./types.js";
 
 export function validateStateInvariants(state: GameState): string[] {
   const errors: string[] = [];

@@ -1,4 +1,4 @@
-import type { CardDTO, CardID, GameEvent, GameState, Meld, Phase, PlayerID, PlayerPublic } from "./types";
+import type { CardDTO, CardID, GameEvent, GameState, Meld, Phase, PlayerID, PlayerPublic } from "./types.js";
 
 export type PlayerGameView = {
   viewer: PlayerID;

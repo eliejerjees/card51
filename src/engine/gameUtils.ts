@@ -1,5 +1,5 @@
-import { findMeldCandidates } from "./meldFinder";
-import type { CardDTO, CardID } from "./types";
+import { findMeldCandidates } from "./meldFinder.js";
+import type { CardDTO, CardID } from "./types.js";
 
 export class GameUtils {
   public static findValidMeldsById(

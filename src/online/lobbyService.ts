@@ -1,7 +1,7 @@
-import { AuthoritativeGame, type DispatchResult, type PlayerActionRequest } from "../engine/authority";
-import { BOT_ACTION_DELAY_MS, chooseBotAction } from "../engine/bot";
-import { secureRandom } from "../engine/deckFactory";
-import type { PlayerGameView } from "../engine/playerView";
+import { AuthoritativeGame, type DispatchResult, type PlayerActionRequest } from "../engine/authority.js";
+import { BOT_ACTION_DELAY_MS, chooseBotAction } from "../engine/bot.js";
+import { secureRandom } from "../engine/deckFactory.js";
+import type { PlayerGameView } from "../engine/playerView.js";
 
 export type LobbyVisibility = "PRIVATE" | "MATCHMAKING";
 export type LobbyStatus = "WAITING" | "PLAYING" | "FINISHED";

@@ -1,4 +1,4 @@
-import type { Rank, Suit } from "./card";
+import type { Rank, Suit } from "./card.js";
 
 export type CardID = string;
 

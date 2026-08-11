@@ -1,5 +1,5 @@
-import type { CardDTO } from "./types";
-import { Rank, STANDARD_RANKS, STANDARD_SUITS, Suit } from "./card";
+import type { CardDTO } from "./types.js";
+import { Rank, STANDARD_RANKS, STANDARD_SUITS, Suit } from "./card.js";
 
 /** A uniform random fraction backed by the platform's cryptographic RNG. */
 export function secureRandom(): number {

@@ -1,5 +1,5 @@
-import { findMeldCandidates, type MeldCandidate } from "./meldFinder";
-import type { CardDTO, CardID } from "./types";
+import { findMeldCandidates, type MeldCandidate } from "./meldFinder.js";
+import type { CardDTO, CardID } from "./types.js";
 
 export type OpeningGroup = MeldCandidate;
 

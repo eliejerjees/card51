@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { PlayerActionRequest } from "../src/engine/authority";
-import { LobbyService } from "../src/online/lobbyService";
+import type { PlayerActionRequest } from "../src/engine/authority.js";
+import { LobbyService } from "../src/online/lobbyService.js";
 
 const friendsLobbies = new LobbyService();
 

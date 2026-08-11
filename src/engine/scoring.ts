@@ -1,5 +1,5 @@
-import { Rank, cardPointValue } from "./card";
-import type { GameState, PlayerID } from "./types";
+import { Rank, cardPointValue } from "./card.js";
+import type { GameState, PlayerID } from "./types.js";
 
 /** Card-value match penalties: winner 0, unopened hands 100, Jokers 20. */
 export function calculateRoundPenalties(state: GameState): Record<PlayerID, number> {

@@ -1,8 +1,8 @@
-import type { Action } from "./actions";
-import { createPlayerView, type PlayerGameView } from "./playerView";
-import { calculateRoundPenalties } from "./scoring";
-import { applyAction, initGame, type ActionResult } from "./state";
-import type { GameEventType, GameState, PlayerID } from "./types";
+import type { Action } from "./actions.js";
+import { createPlayerView, type PlayerGameView } from "./playerView.js";
+import { calculateRoundPenalties } from "./scoring.js";
+import { applyAction, initGame, type ActionResult } from "./state.js";
+import type { GameEventType, GameState, PlayerID } from "./types.js";
 
 type WithoutPlayer<T> = T extends { player: PlayerID } ? Omit<T, "player"> : never;
 export type PlayerActionRequest = WithoutPlayer<Action>;

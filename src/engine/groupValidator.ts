@@ -1,5 +1,5 @@
-import { cardPointValue, Rank, STANDARD_SUITS, Suit } from "./card";
-import type { AceMode as AceModeType, CardDTO, CardID, Meld, MeldKind } from "./types";
+import { cardPointValue, Rank, STANDARD_SUITS, Suit } from "./card.js";
+import type { AceMode as AceModeType, CardDTO, CardID, Meld, MeldKind } from "./types.js";
 
 export const AceMode = {
   LOW: "LOW",

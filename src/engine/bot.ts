@@ -1,11 +1,11 @@
-import type { Action } from "./actions";
-import { cardPointValue } from "./card";
-import { GameUtils } from "./gameUtils";
-import { GroupValidator } from "./groupValidator";
-import { canTakeDiscardForOpening, findOpeningPlan } from "./opening";
-import { createPlayerView, type PlayerGameView } from "./playerView";
-import { applyAction, type ActionResult } from "./state";
-import type { CardID, GameState, PlayerID } from "./types";
+import type { Action } from "./actions.js";
+import { cardPointValue } from "./card.js";
+import { GameUtils } from "./gameUtils.js";
+import { GroupValidator } from "./groupValidator.js";
+import { canTakeDiscardForOpening, findOpeningPlan } from "./opening.js";
+import { createPlayerView, type PlayerGameView } from "./playerView.js";
+import { applyAction, type ActionResult } from "./state.js";
+import type { CardID, GameState, PlayerID } from "./types.js";
 
 /** Delay between visible bot actions in every game mode. */
 export const BOT_ACTION_DELAY_MS = 900;
