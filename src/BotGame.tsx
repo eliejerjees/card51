@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { chooseBotAction } from "./engine/bot";
+import { BOT_ACTION_DELAY_MS, chooseBotAction } from "./engine/bot";
 import { AuthoritativeGame, type PlayerActionRequest } from "./engine/authority";
 import type { PlayerGameView } from "./engine/playerView";
 import { GameTable } from "./GameTable";
@@ -33,7 +33,7 @@ export function BotGame({ numPlayers, session, onSessionChange, onLeave, onSetti
       if (!action) return;
       const { result } = authorityRef.current.dispatch(player, action as PlayerActionRequest);
       if (result.ok) setGame(authorityRef.current.viewFor(HUMAN_ID));
-    }, 900);
+    }, BOT_ACTION_DELAY_MS);
     return () => window.clearTimeout(timer);
   }, [game]);
 
@@ -52,5 +52,6 @@ export function BotGame({ numPlayers, session, onSessionChange, onLeave, onSetti
     onLeave={onLeave}
     onSettings={onSettings}
     onNewGame={newGame}
+    onPlayAgain={newGame}
   />;
 }

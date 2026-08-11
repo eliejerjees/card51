@@ -2,12 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import { Rank, Suit } from "./card";
 import { GroupValidator } from "./groupValidator";
 import { validateStateInvariants } from "./invariants";
-import { botStep } from "./bot";
+import { BOT_ACTION_DELAY_MS, botStep } from "./bot";
 import { findMeldCandidates } from "./meldFinder";
 import { createPlayerView } from "./playerView";
 import { AuthoritativeGame } from "./authority";
 import { LobbyService } from "../online/lobbyService";
 import { applyAction, initGame } from "./state";
+import { calculateRoundPenalties } from "./scoring";
 import type { CardDTO, CardID, GameState, Meld } from "./types";
 
 const c = (id: string, rank: CardDTO["rank"], suit: CardDTO["suit"]): CardDTO => ({ id, rank, suit });
@@ -419,6 +420,17 @@ describe("draw-pile recycling and card identity", () => {
   });
 });
 
+describe("match scoring", () => {
+  it("scores winners at zero, unopened players at 100, and unplayed Jokers at 20", () => {
+    const cards = [c("winner", Rank.TWO, Suit.CLUBS), c("five", Rank.FIVE, Suit.HEARTS), joker()];
+    const state = testState(cards, { hand: [], otherHand: ["five", "joker"], phase: "GAME_OVER" });
+    state.winner = 0;
+    expect(calculateRoundPenalties(state)).toEqual({ 0: 0, 1: 100 });
+    state.playersPublic[1].opened = true;
+    expect(calculateRoundPenalties(state)).toEqual({ 0: 0, 1: 25 });
+  });
+});
+
 describe("whole-game invariants", () => {
   it.each([2, 3, 4])("keeps every physical card valid during deterministic %i-player bot play", (players) => {
     let seed = 0x51cafe + players;
@@ -483,8 +495,14 @@ describe("multiplayer authority and hidden information", () => {
     const joined = service.joinPrivateLobby(created.inviteCode, "friend", "Friend");
     expect(joined.seats).toHaveLength(2);
     expect(() => service.start(created.id, "friend")).toThrow(/host/i);
+    expect(() => service.updateSettings(created.id, "friend", { turnTimeLimitMs: null, scoringMode: "VALUES" })).toThrow(/host/i);
+    const updated = service.updateSettings(created.id, "host", { turnTimeLimitMs: null, scoringMode: "VALUES" });
+    expect(updated.settings).toMatchObject({ turnTimeLimitMs: null, scoringMode: "VALUES" });
     const withBot = service.addBot(created.id, "host");
     expect(withBot.seats).toHaveLength(3);
+    expect(() => service.removeSeat(created.id, "friend", withBot.seats[2].userId)).toThrow(/host/i);
+    expect(service.removeSeat(created.id, "host", withBot.seats[2].userId).seats).toHaveLength(2);
+    service.addBot(created.id, "host");
     const started = service.start(created.id, "host");
     expect(started.status).toBe("PLAYING");
     expect(started.game).not.toBeNull();
@@ -497,17 +515,35 @@ describe("multiplayer authority and hidden information", () => {
   });
 
   it("advances bot seats and exposes transactional reset through the lobby", () => {
-    const service = new LobbyService(() => 0.99);
-    const created = service.createPrivateLobby("host", "Host", { maxPlayers: 2 });
-    service.addBot(created.id, "host");
-    const started = service.start(created.id, "host");
-    expect(started.game?.currentTurn).toBe(0);
-    expect(started.game?.turnNumber).toBe(2);
+    vi.useFakeTimers();
+    try {
+      const service = new LobbyService(() => 0.99);
+      const created = service.createPrivateLobby("host", "Host", { maxPlayers: 2 });
+      service.addBot(created.id, "host");
+      const started = service.start(created.id, "host");
+      expect(started.game?.currentTurn).toBe(1);
+      expect(started.game?.phase).toBe("DRAW");
 
-    expect(service.dispatch(created.id, "host", { type: "DRAW_DECK" }).result).toEqual({ ok: true });
-    expect(service.dispatch(created.id, "host", { type: "PASS_ACTION" }).result).toEqual({ ok: true });
-    expect(service.getLobby(created.id, "host").game?.phase).toBe("DISCARD");
-    expect(service.resetTurnActions(created.id, "host").game?.phase).toBe("ACTION");
+      vi.advanceTimersByTime(BOT_ACTION_DELAY_MS - 1);
+      expect(service.getLobby(created.id, "host").game?.phase).toBe("DRAW");
+      vi.advanceTimersByTime(1);
+      expect(service.getLobby(created.id, "host").game?.phase).toBe("ACTION");
+
+      let advanced = service.getLobby(created.id, "host");
+      for (let step = 0; step < 50 && advanced.game?.currentTurn !== 0; step++) {
+        vi.advanceTimersByTime(BOT_ACTION_DELAY_MS);
+        advanced = service.getLobby(created.id, "host");
+      }
+      expect(advanced.game?.currentTurn).toBe(0);
+      expect(advanced.game?.turnNumber).toBe(2);
+
+      expect(service.dispatch(created.id, "host", { type: "DRAW_DECK" }).result).toEqual({ ok: true });
+      expect(service.dispatch(created.id, "host", { type: "PASS_ACTION" }).result).toEqual({ ok: true });
+      expect(service.getLobby(created.id, "host").game?.phase).toBe("DISCARD");
+      expect(service.resetTurnActions(created.id, "host").game?.phase).toBe("ACTION");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("stores optional turn limits and automatically completes an expired turn", () => {
@@ -527,6 +563,32 @@ describe("multiplayer authority and hidden information", () => {
       expect(advanced.game?.currentTurn).toBe(1);
       expect(advanced.game?.turnNumber).toBe(2);
       expect(advanced.turnDeadlineAt).toBe(Date.now() + 30_000);
+      expect(advanced.game?.playersPublic[0].opened).toBe(false);
+      expect(advanced.game?.playersPublic[0].handCount).toBe(14);
+      expect(advanced.game?.tableMelds).toHaveLength(0);
+      expect(advanced.game?.events.some((event) => event.type === "TIMEOUT" && event.message.includes("1/3"))).toBe(true);
+
+      const completeFriendTurn = () => {
+        expect(service.dispatch(created.id, "friend", { type: "DRAW_DECK" }).result).toEqual({ ok: true });
+        const drawnId = service.getLobby(created.id, "friend").game?.lastDrawnCardId;
+        expect(drawnId).toBeTruthy();
+        expect(service.dispatch(created.id, "friend", { type: "PASS_ACTION" }).result).toEqual({ ok: true });
+        expect(service.dispatch(created.id, "friend", { type: "DISCARD", cardId: [drawnId!] }).result).toEqual({ ok: true });
+      };
+
+      completeFriendTurn();
+      vi.advanceTimersByTime(30_001);
+      expect(service.getLobby(created.id, "host").seats[0].consecutiveTimeouts).toBe(2);
+      completeFriendTurn();
+      vi.advanceTimersByTime(30_001);
+      const replaced = service.getLobby(created.id, "host");
+      expect(replaced.seats[0].isBot).toBe(true);
+      expect(replaced.seats[0].consecutiveTimeouts).toBe(3);
+      expect(replaced.game?.events.some((event) => event.type === "TIMEOUT" && event.message.includes("replaced by a bot"))).toBe(true);
+      expect(replaced.status).toBe("FINISHED");
+      expect(replaced.game?.phase).toBe("GAME_OVER");
+      expect(replaced.game?.winner).toBe(1);
+      expect(replaced.seats[1].wins).toBe(1);
 
       const untimed = new LobbyService(() => 0.5).createPrivateLobby("other", "Other", { maxPlayers: 2, turnTimeLimitMs: null });
       expect(untimed.settings.turnTimeLimitMs).toBeNull();
@@ -534,5 +596,25 @@ describe("multiplayer authority and hidden information", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("awards the round to the last active human without ending intentional bot games", () => {
+    const friends = new LobbyService(() => 0);
+    const created = friends.createPrivateLobby("host", "Host", { maxPlayers: 2 });
+    friends.joinPrivateLobby(created.inviteCode, "friend", "Friend");
+    friends.start(created.id, "host");
+    friends.leave(created.id, "friend");
+    const finished = friends.getLobby(created.id, "host");
+    expect(finished.status).toBe("FINISHED");
+    expect(finished.game?.phase).toBe("GAME_OVER");
+    expect(finished.game?.winner).toBe(0);
+    expect(finished.seats[0].wins).toBe(1);
+
+    const bots = new LobbyService(() => 0);
+    const botLobby = bots.createPrivateLobby("solo", "Solo", { maxPlayers: 2 });
+    bots.addBot(botLobby.id, "solo");
+    const playing = bots.start(botLobby.id, "solo");
+    expect(playing.status).toBe("PLAYING");
+    expect(playing.game?.phase).not.toBe("GAME_OVER");
   });
 });

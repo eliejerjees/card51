@@ -7,6 +7,9 @@ import { createPlayerView, type PlayerGameView } from "./playerView";
 import { applyAction, type ActionResult } from "./state";
 import type { CardID, GameState, PlayerID } from "./types";
 
+/** Delay between visible bot actions in every game mode. */
+export const BOT_ACTION_DELAY_MS = 900;
+
 function usefulOpenDiscard(view: PlayerGameView, discardId: CardID): boolean {
   const hypothetical = [...view.ownHand, discardId];
   if (GameUtils.findValidMeldsById(hypothetical, view.cardsById).some((meld) => meld.includes(discardId))) return true;

@@ -40,6 +40,7 @@ export type GameEventType =
   | "EXTEND_MELD"
   | "REPLACE_JOKER"
   | "BURN"
+  | "TIMEOUT"
   | "DISCARD"
   | "WIN";
 

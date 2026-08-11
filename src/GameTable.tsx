@@ -46,7 +46,7 @@ function SortableFriendCard({ id, index, activeIndex, dragOverIndex, recentDraw,
   return <div ref={(node) => { setNodeRef(node); onNodeRef(node); }} className={`hand-card-slot ${isDragging ? "dragging" : ""} ${distance <= 3 ? "drag-neighbor" : ""} ${recentDraw ? "recently-drawn" : ""} ${insertion}`} style={{ transform: CSS.Transform.toString(transform), transition: slotTransition, "--drag-lift": `${Math.max(0, 6 - distance * 1.5)}px`, "--drag-tilt": `${direction * Math.max(0, 1.1 - distance * .25)}deg` } as CSSProperties}><FriendCard card={card} selected={selected} disabled={disabled} badge={badge} onClick={onClick} dragListeners={listeners} nativeDragProps={{ draggable: true, onDragStart: (event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", id); onNativeDragStart(id); }, onDragOver: (event) => { event.preventDefault(); onNativeDragOver(id); }, onDrop: (event) => { event.preventDefault(); onNativeDrop(id); }, onDragEnd: onNativeDragEnd }} /></div>;
 }
 
-export type TablePlayer = { id: number; name: string; avatar?: string };
+export type TablePlayer = { id: number; name: string; avatar?: string; statusNote?: string; scoreLabel?: string };
 
 export type GameTableProps = {
   game: PlayerGameView;
@@ -58,9 +58,11 @@ export type GameTableProps = {
   onLeave: () => void;
   onSettings: () => void;
   onNewGame?: () => void;
+  onPlayAgain?: () => void;
+  playAgainLabel?: string;
 };
 
-export function GameTable({ game, players, modeLabel, turnDeadlineAt = null, onAction, onResetTurn, onLeave, onSettings, onNewGame }: GameTableProps) {
+export function GameTable({ game, players, modeLabel, turnDeadlineAt = null, onAction, onResetTurn, onLeave, onSettings, onNewGame, onPlayAgain, playAgainLabel = "Play again" }: GameTableProps) {
   const [selectedIds, setSelectedIds] = useState<Set<CardID>>(new Set());
   const [draftGroups, setDraftGroups] = useState<MeldProposal[]>([]);
   const [selectedMeldId, setSelectedMeldId] = useState<string | null>(null);
@@ -110,6 +112,7 @@ export function GameTable({ game, players, modeLabel, turnDeadlineAt = null, onA
   const remainingTurnSeconds = Math.ceil(remainingTurnMs / 1000);
   const turnProgress = game.turnTimeLimitMs ? Math.min(1, remainingTurnMs / game.turnTimeLimitMs) : 0;
   const timerUrgent = remainingTurnMs <= 10_000;
+  const viewerStatusNote = players.find((player) => player.id === game.viewer)?.statusNote;
 
   const createTableMotion = useCallback((type: TableMotion["type"], player: number, cardId?: CardID): TableMotion => {
     const table = tableShellRef.current;
@@ -325,6 +328,7 @@ export function GameTable({ game, players, modeLabel, turnDeadlineAt = null, onA
   const playerName = (id: number) => players.find((player) => player.id === id)?.name ?? `Player ${id + 1}`;
   const turnName = playerName(game.currentTurn);
   const winnerName = playerName(game.winner ?? 0);
+  const viewerScoreLabel = players.find((player) => player.id === game.viewer)?.scoreLabel;
   return (
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragOver={handleDragOver} onDragEnd={handleDragEnd} onDragCancel={() => { setActiveDragId(null); setDragOverId(null); }}>
     <main className="app-shell game-table-app">
@@ -333,11 +337,6 @@ export function GameTable({ game, players, modeLabel, turnDeadlineAt = null, onA
         <div className="new-game-controls"><span className="session-mode">{modeLabel}</span><button type="button" onClick={onSettings}>Settings</button><button type="button" onClick={onLeave}>Home</button>{onNewGame && <button type="button" className="gold-button" onClick={onNewGame}>New game</button>}</div>
       </header>
 
-      <section className="status-strip" aria-live="polite">
-        <strong>{game.phase === "GAME_OVER" ? `${winnerName} wins!` : isMyTurn ? "Your turn" : `${turnName}'s turn`}</strong>
-        <span>{game.phase === "DRAW" ? "Draw a card" : game.phase === "GAME_OVER" ? "Game over" : "Play or discard"}</span>
-        <span>Turn {game.turnNumber}</span>
-      </section>
       {error && <div className="error-banner" role="alert">{error}</div>}
 
       {game.lastBurnedMeld && (
@@ -350,7 +349,7 @@ export function GameTable({ game, players, modeLabel, turnDeadlineAt = null, onA
             {players.map((player) => player.id === game.viewer ? null : (
               <div ref={(node) => { if (node) playerSeatRefs.current.set(player.id, node); else playerSeatRefs.current.delete(player.id); }} className={`player-chip ${player.id === game.currentTurn ? "current" : ""} ${tableMotion?.player === player.id ? "motion-pulse" : ""}`} key={player.id}>
                 <div className="player-avatar">{player.avatar ?? player.name.slice(0, 1).toUpperCase()}</div>
-                <div className="player-copy"><span>{player.name}</span><strong>{game.playersPublic[player.id].handCount} cards</strong><small>{game.playersPublic[player.id].opened ? "Opened" : "Closed"}</small></div>
+                <div className="player-copy"><span>{player.name}{player.scoreLabel && <b className="seat-score">{player.scoreLabel}</b>}</span><strong>{game.playersPublic[player.id].handCount} cards</strong><small className={player.statusNote ? "timeout-note" : ""}>{player.statusNote ?? (game.playersPublic[player.id].opened ? "Opened" : "Closed")}</small></div>
                 <div className="seat-card-stack" aria-hidden="true"><i /><i /><i /></div>
                 {turnDeadlineAt !== null && player.id === game.currentTurn && <div className={`opponent-turn-timer ${timerUrgent ? "urgent" : ""}`} role="progressbar" aria-label={`${remainingTurnSeconds} seconds left in ${player.name}'s turn`} aria-valuemin={0} aria-valuemax={game.turnTimeLimitMs ? game.turnTimeLimitMs / 1000 : 0} aria-valuenow={remainingTurnSeconds}><i style={{ "--turn-progress": turnProgress } as CSSProperties} /></div>}
               </div>
@@ -361,29 +360,30 @@ export function GameTable({ game, players, modeLabel, turnDeadlineAt = null, onA
 
           <section className="table-area">
             <div className="piles">
-              <button ref={drawPileRef} className={`pile-button ${tableMotion?.type === "DRAW_DECK" ? "motion-pulse" : ""}`} type="button" disabled={busy || !isMyTurn || game.phase !== "DRAW" || game.deckCount === 0} onClick={() => perform(async () => { await send({ type: "DRAW_DECK" }); })}><span>Draw pile</span><FriendCard /><strong>{game.deckCount}</strong></button>
-              <FriendDropZone id="discard-drop" className="discard-drop-zone" onNativeDrop={() => activeDragId && handleCardDrop(activeDragId, "discard-drop")}><button ref={discardPileRef} className={`pile-button ${tableMotion?.type === "DRAW_DISCARD" || tableMotion?.type === "DISCARD" ? "motion-pulse" : ""}`} type="button" disabled={busy || !isMyTurn || game.phase !== "DRAW" || !canDrawDiscard} onClick={() => perform(async () => { await send({ type: "DRAW_DISCARD" }); })}><span>Discard pile</span>{topDiscard ? <FriendCard card={topDiscard} /> : <span className="empty-pile">Empty</span>}<strong>{topDiscard ? 1 : 0}</strong></button></FriendDropZone>
+              <button ref={drawPileRef} className={`pile-button ${isMyTurn && game.phase === "DRAW" ? "action-ready" : ""} ${tableMotion?.type === "DRAW_DECK" ? "motion-pulse" : ""}`} type="button" disabled={busy || !isMyTurn || game.phase !== "DRAW" || game.deckCount === 0} onClick={() => perform(async () => { await send({ type: "DRAW_DECK" }); })}><span>Draw pile</span><FriendCard /><strong>{game.deckCount}</strong></button>
+              <FriendDropZone id="discard-drop" className={`discard-drop-zone ${isMyTurn && (game.phase === "ACTION" || game.phase === "DISCARD") ? "action-ready" : ""}`} onNativeDrop={() => activeDragId && handleCardDrop(activeDragId, "discard-drop")}><button ref={discardPileRef} className={`pile-button ${isMyTurn && game.phase === "DRAW" && canDrawDiscard ? "action-ready" : ""} ${tableMotion?.type === "DRAW_DISCARD" || tableMotion?.type === "DISCARD" ? "motion-pulse" : ""}`} type="button" disabled={busy || !isMyTurn || game.phase !== "DRAW" || !canDrawDiscard} onClick={() => perform(async () => { await send({ type: "DRAW_DISCARD" }); })}><span>Discard pile</span>{topDiscard ? <FriendCard card={topDiscard} /> : <span className="empty-pile">Empty</span>}<strong>{topDiscard ? 1 : 0}</strong></button></FriendDropZone>
             </div>
 
-            <FriendDropZone id="table-meld-drop" className="meld-drop-zone" onNativeDrop={() => activeDragId && handleCardDrop(activeDragId, "table-meld-drop")}><div className="meld-board">
+            <FriendDropZone id="table-meld-drop" className={`meld-drop-zone ${isMyTurn && game.phase === "ACTION" ? "action-ready" : ""}`} onNativeDrop={() => activeDragId && handleCardDrop(activeDragId, "table-meld-drop")}><div className="meld-board">
               <div className="section-heading"><div><p className="eyebrow">Shared table</p><h2>Active melds</h2></div><span>{game.tableMelds.length}</span></div>
               {draftGroups.length > 0 && <div className="staged-table-melds">{draftGroups.map((group, index) => <article className="meld-card staged-meld" key={`${group.cardIds.join("-")}-${index}`}><button type="button" className="meld-heading" onClick={() => setDraftGroups((groups) => groups.filter((_, groupIndex) => groupIndex !== index))}>Staged meld · remove</button><div className="meld-cards">{group.cardIds.map((id) => <FriendCard key={id} card={game.cardsById[id]} small />)}</div><span className="meld-owner">Opening total: {draftPoints} / 51</span></article>)}</div>}
               {game.tableMelds.length === 0 && draftGroups.length === 0 ? <p className="empty-message">No active melds yet. Complete four-card sets and full runs burn automatically.</p> : <div className="meld-grid">{game.tableMelds.map((meld) => <FriendDropZone id={`meld:${meld.id}`} className="meld-card-drop" key={meld.id} onNativeDrop={() => activeDragId && handleCardDrop(activeDragId, `meld:${meld.id}`)}><article className={`meld-card ${selectedMeldId === meld.id ? "selected-meld" : ""}`}><button type="button" className="meld-heading" onClick={() => { setSelectedMeldId(selectedMeldId === meld.id ? null : meld.id); setSelectedJokerId(null); }}>{meld.kind} · {calculateMeldValue(meld, game.cardsById)} pts</button><div className="meld-cards">{meld.cardIds.map((id) => <FriendCard key={id} card={game.cardsById[id]} small selected={selectedJokerId === id} onClick={game.cardsById[id].rank === Rank.JOKER ? () => { setSelectedMeldId(meld.id); setSelectedJokerId(id); } : () => { setSelectedMeldId(meld.id); setSelectedJokerId(null); }} />)}</div><span className="meld-owner">Created by {playerName(meld.owner)}</span></article></FriendDropZone>)}</div>}
             </div></FriendDropZone>
           </section>
 
-          <section className="action-panel">
-            <div className="section-heading"><div><p className="eyebrow">Turn flow</p><h2>{isMyTurn ? "Your move" : `${turnName} is playing…`}</h2></div>{!opened && draftGroups.length > 0 && <span>Opening · {draftPoints} pts</span>}</div>
-            {isMyTurn && game.phase === "DRAW" && <p className="instruction"><strong>Start by drawing.</strong> Choose the deck or discard pile above.</p>}
-            {isMyTurn && game.phase !== "DRAW" && game.phase !== "GAME_OVER" && <div className="action-stack"><p className="instruction">{opened ? selectedMeldId ? selectedJokerId ? "Select its natural replacement from your hand." : "Add selected cards to this meld." : "Select cards to create a meld, or select a table meld to extend." : `Stage opening melds worth at least 51 points. Current total: ${draftPoints}.`}</p><div className="button-row"><button type="button" disabled={busy || selection.length === 0 || (!selectedMeldId && !candidate)} onClick={playSelection}>{opened ? selectedMeldId ? "Add to meld" : "Play meld" : "Move selection to table"}</button>{canSwapJoker && <button type="button" disabled={busy} onClick={swapJoker}>Replace Joker</button>}<button type="button" disabled={busy} onClick={undoTurn}>Undo table moves</button><button type="button" className="gold-button" disabled={busy || !selectedDiscard} onClick={() => finishTurn()}>Discard & end turn</button></div></div>}
-            {!isMyTurn && game.phase !== "GAME_OVER" && <p className="instruction waiting-copy">Watch the table — their committed plays and discard will appear here.</p>}
-          </section>
-
-          {isMyTurn && turnDeadlineAt !== null && game.phase !== "GAME_OVER" && <section className={`table-turn-timer ${timerUrgent ? "urgent" : ""}`} aria-label={`${remainingTurnSeconds} seconds left in your turn`}><div className="turn-timer-copy"><span>Your time</span><strong>{remainingTurnSeconds}<small>s</small></strong></div><div className="turn-timer-track" role="progressbar" aria-label="Time remaining" aria-valuemin={0} aria-valuemax={game.turnTimeLimitMs ? game.turnTimeLimitMs / 1000 : 0} aria-valuenow={remainingTurnSeconds}><i style={{ "--turn-progress": turnProgress } as CSSProperties} /></div></section>}
-
           <section ref={handPanelRef} className={`hand-panel ${tableMotion?.player === game.viewer ? "motion-pulse" : ""}`}>
-            <div className="section-heading"><div className="you-heading"><span className="player-avatar you-avatar">YOU</span><div><p className="eyebrow">Your seat · {opened ? "Opened" : "Closed"}</p><h2>Your hand · {game.ownHand.length}</h2></div></div><div className="sort-controls"><button type="button" aria-pressed={sortMode === "rank"} onClick={() => setSortMode("rank")}>By rank</button><button type="button" aria-pressed={sortMode === "suit"} onClick={() => setSortMode("suit")}>By suit</button></div></div>
-            <p className="drag-hint">Drag to reorder · Select several cards, then drag them to the table · Drag one to the discard pile to end your turn</p>
+            <div className={`hand-command-bar ${timerUrgent ? "urgent" : ""}`}>
+              <div className="hand-identity"><span className="player-avatar you-avatar">YOU</span><div><h2>{game.ownHand.length} cards</h2><p>{opened ? "Opened" : "Closed"}{viewerScoreLabel ? ` · ${viewerScoreLabel}` : ""}</p>{viewerStatusNote?.startsWith("Timeout") && <small>{viewerStatusNote}</small>}</div></div>
+              <div className="turn-command">
+                <div className="turn-command-heading"><div><p className="eyebrow">{game.phase === "GAME_OVER" ? "Game over" : isMyTurn ? "Your turn" : `${turnName}'s turn`}<span className="turn-number">Turn {game.turnNumber}</span>{!opened && draftGroups.length > 0 && <span className="opening-count">Opening · {draftPoints} pts</span>}</p><h3>{game.phase === "DRAW" ? "Draw a card" : game.phase === "GAME_OVER" ? `${winnerName} wins` : isMyTurn ? "Play cards, then discard" : `${turnName} is playing…`}</h3></div></div>
+                {isMyTurn && game.phase === "DRAW" && <p className="instruction"><strong>Start by drawing</strong> from either pile above.</p>}
+                {isMyTurn && game.phase !== "DRAW" && game.phase !== "GAME_OVER" && <div className="action-stack"><p className="instruction">{opened ? selectedMeldId ? selectedJokerId ? "Select its natural replacement from your hand." : "Add selected cards to this meld." : "Select cards to create a meld, or select a table meld to extend." : `Stage opening melds worth at least 51 points. Current total: ${draftPoints}.`}</p><div className="button-row"><button type="button" disabled={busy || selection.length === 0 || (!selectedMeldId && !candidate)} onClick={playSelection}>{opened ? selectedMeldId ? "Add to meld" : "Play meld" : "Move selection to table"}</button>{canSwapJoker && <button type="button" disabled={busy} onClick={swapJoker}>Replace Joker</button>}<button type="button" disabled={busy} onClick={undoTurn}>Undo table moves</button><button type="button" className="gold-button" disabled={busy || !selectedDiscard} onClick={() => finishTurn()}>Discard & end turn</button></div></div>}
+                {!isMyTurn && game.phase !== "GAME_OVER" && <p className="instruction waiting-copy">Watch the table for their plays.</p>}
+              </div>
+              <div className="hand-tools">{isMyTurn && turnDeadlineAt !== null && game.phase !== "GAME_OVER" && <strong className="timer-count" style={{ "--turn-progress": turnProgress } as CSSProperties} aria-label={`${remainingTurnSeconds} seconds left`}>{remainingTurnSeconds}<small>s</small></strong>}<div className="sort-controls" aria-label="Sort hand"><button type="button" aria-pressed={sortMode === "rank"} onClick={() => setSortMode("rank")}>Rank</button><button type="button" aria-pressed={sortMode === "suit"} onClick={() => setSortMode("suit")}>Suit</button></div></div>
+              {isMyTurn && turnDeadlineAt !== null && game.phase !== "GAME_OVER" && <div className="compact-turn-timer" role="progressbar" aria-label="Time remaining" aria-valuemin={0} aria-valuemax={game.turnTimeLimitMs ? game.turnTimeLimitMs / 1000 : 0} aria-valuenow={remainingTurnSeconds}><i style={{ "--turn-progress": turnProgress } as CSSProperties} /></div>}
+            </div>
+            <p className="drag-hint">Select several cards to move them together · Drag one to the discard pile to end your turn</p>
             <SortableContext items={orderedHand} strategy={horizontalListSortingStrategy}><div ref={handCardsRef} className={`hand-cards ${activeDragId ? "live-reordering" : ""}`}>{orderedHand.map((id, index) => <SortableFriendCard key={id} id={id} index={index} activeIndex={activeHandIndex} dragOverIndex={dragOverId ? orderedHand.indexOf(dragOverId) : -1} recentDraw={recentDrawId === id} card={game.cardsById[id]} selected={selectedIds.has(id)} disabled={stagedIds.has(id)} badge={stagedIds.has(id) ? "Staged" : undefined} onClick={() => toggleCard(id)} onNativeDragStart={(dragId) => { setActiveDragId(dragId); setDragOverId(dragId); }} onNativeDragOver={setDragOverId} onNativeDrop={(targetId) => activeDragId && handleCardDrop(activeDragId, targetId)} onNativeDragEnd={() => { setActiveDragId(null); setDragOverId(null); }} onNodeRef={(node) => { if (node) handCardRefs.current.set(id, node); else handCardRefs.current.delete(id); }} />)}</div></SortableContext>
           </section>
         </div>
@@ -391,7 +391,7 @@ export function GameTable({ game, players, modeLabel, turnDeadlineAt = null, onA
         <aside className="lower-grid"><details className="history-panel"><summary>Game history <span>{game.events.length}</span></summary>{game.events.length === 0 ? <p className="empty-message">No actions yet.</p> : <ol>{game.events.slice(-10).reverse().map((event) => <li key={event.id}>{event.message}</li>)}</ol>}</details><details className="rules-panel"><summary>Rules quick reference</summary><p>The complete authoritative specification is stored in <code>RULES.md</code>.</p></details></aside>
       </div>
 
-      {game.phase === "GAME_OVER" && <div className={`game-result-overlay ${game.winner === game.viewer ? "victory" : "defeat"}`} role="dialog" aria-modal="true"><div className="result-particles" aria-hidden="true">{Array.from({ length: 14 }, (_, index) => <i key={index} />)}</div><div className="result-card"><p className="eyebrow">Game over</p><h2>{game.winner === game.viewer ? "You win!" : `${winnerName} wins`}</h2><p>{game.winner === game.viewer ? "Perfect final discard." : "Good game."}</p><button type="button" className="gold-button" onClick={onLeave}>Return home</button></div></div>}
+      {game.phase === "GAME_OVER" && <div className={`game-result-overlay ${game.winner === game.viewer ? "victory" : "defeat"}`} role="dialog" aria-modal="true" aria-labelledby="game-result-title"><div className="result-particles" aria-hidden="true">{Array.from({ length: 14 }, (_, index) => <i key={index} />)}</div><div className="result-card"><p className="eyebrow">Round over</p><h2 id="game-result-title">{game.winner === game.viewer ? "You win!" : `${winnerName} wins`}</h2><p>{game.winner === game.viewer ? "Perfect final discard." : "Good game."}</p><div className="result-actions">{onPlayAgain && <button type="button" className="gold-button" onClick={onPlayAgain}>{playAgainLabel}</button>}<button type="button" onClick={onLeave}>Quit to home</button></div></div></div>}
     </main>
     <DragOverlay>{activeDragId && game.cardsById[activeDragId] ? <div className="drag-overlay-card"><FriendCard card={game.cardsById[activeDragId]} />{selectedIds.has(activeDragId) && selection.length > 1 && <span>+{selection.length - 1}</span>}</div> : null}</DragOverlay>
     </DndContext>

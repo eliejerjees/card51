@@ -1,5 +1,5 @@
 import { AuthoritativeGame, type DispatchResult, type PlayerActionRequest } from "../engine/authority";
-import { chooseBotAction } from "../engine/bot";
+import { BOT_ACTION_DELAY_MS, chooseBotAction } from "../engine/bot";
 import { secureRandom } from "../engine/deckFactory";
 import type { PlayerGameView } from "../engine/playerView";
 
@@ -9,12 +9,17 @@ export type LobbyStatus = "WAITING" | "PLAYING" | "FINISHED";
 export type LobbySettings = {
   maxPlayers: 2 | 3 | 4;
   turnTimeLimitMs: number | null;
+  scoringMode: "ROUNDS" | "VALUES";
 };
 
 export type LobbySeat = {
   userId: string;
   displayName: string;
   isBot: boolean;
+  replacedHuman: boolean;
+  consecutiveTimeouts: number;
+  wins: number;
+  score: number;
 };
 
 export type LobbySnapshot = {
@@ -26,12 +31,14 @@ export type LobbySnapshot = {
   hostUserId: string;
   settings: LobbySettings;
   turnDeadlineAt: number | null;
+  roundNumber: number;
   seats: LobbySeat[];
   game: PlayerGameView | null;
 };
 
 type LobbyRecord = Omit<LobbySnapshot, "invitePath" | "game"> & {
   game: AuthoritativeGame | null;
+  nextBotActionAt: number | null;
 };
 
 function assertUser(userId: string, displayName: string): void {
@@ -89,12 +96,41 @@ export class LobbyService {
     const lobby = this.requireLobby(lobbyId);
     if (lobby.hostUserId !== requestingUserId) throw new Error("Only the lobby host may add bots.");
     if (lobby.status !== "WAITING") throw new Error("Bots can only be added before the game starts.");
+    if (lobby.roundNumber > 0) throw new Error("Seats cannot change after a match has started.");
     if (lobby.seats.length >= lobby.settings.maxPlayers) throw new Error("The lobby is full.");
     lobby.seats.push({
       userId: `bot-${this.#nextBotId++}`,
       displayName: displayName?.trim() || `Bot ${lobby.seats.filter((seat) => seat.isBot).length + 1}`,
       isBot: true,
+      replacedHuman: false,
+      consecutiveTimeouts: 0,
+      wins: 0,
+      score: 0,
     });
+    return this.snapshot(lobby, requestingUserId);
+  }
+
+  public removeSeat(lobbyId: string, requestingUserId: string, targetUserId: string): LobbySnapshot {
+    const lobby = this.requireLobby(lobbyId);
+    if (lobby.hostUserId !== requestingUserId) throw new Error("Only the lobby host may remove players.");
+    if (lobby.status !== "WAITING" || lobby.roundNumber > 0) throw new Error("Seats can only be removed before the first round.");
+    if (targetUserId === lobby.hostUserId) throw new Error("The host cannot remove their own seat.");
+    const target = lobby.seats.findIndex((seat) => seat.userId === targetUserId);
+    if (target < 0) throw new Error("That player is not in the lobby.");
+    lobby.seats.splice(target, 1);
+    return this.snapshot(lobby, requestingUserId);
+  }
+
+  public updateSettings(
+    lobbyId: string,
+    requestingUserId: string,
+    settings: Pick<LobbySettings, "turnTimeLimitMs" | "scoringMode">,
+  ): LobbySnapshot {
+    const lobby = this.requireLobby(lobbyId);
+    if (lobby.hostUserId !== requestingUserId) throw new Error("Only the lobby host may change table rules.");
+    if (lobby.status !== "WAITING" || lobby.roundNumber > 0) throw new Error("Table rules can only be changed before the first round.");
+    lobby.settings.turnTimeLimitMs = settings.turnTimeLimitMs;
+    lobby.settings.scoringMode = settings.scoringMode;
     return this.snapshot(lobby, requestingUserId);
   }
 
@@ -103,6 +139,46 @@ export class LobbyService {
     if (lobby.hostUserId !== requestingUserId) throw new Error("Only the lobby host may start the game.");
     this.startRecord(lobby);
     return this.snapshot(lobby, requestingUserId);
+  }
+
+  public leave(lobbyId: string, userId: string): void {
+    const lobby = this.requireLobby(lobbyId);
+    const player = lobby.seats.findIndex((seat) => seat.userId === userId);
+    if (player < 0) return;
+
+    if (lobby.status === "WAITING") {
+      lobby.seats.splice(player, 1);
+      if (lobby.seats.length === 0) {
+        this.#lobbies.delete(lobbyId);
+        return;
+      }
+      if (lobby.hostUserId === userId) lobby.hostUserId = lobby.seats.find((seat) => !seat.isBot)?.userId ?? lobby.seats[0].userId;
+      return;
+    }
+
+    if (lobby.status !== "PLAYING" || !lobby.game || lobby.seats[player].isBot) return;
+    lobby.seats[player].isBot = true;
+    lobby.seats[player].replacedHuman = true;
+    lobby.seats[player].consecutiveTimeouts = 3;
+    if (this.finishIfLastHuman(lobby)) return;
+    if (lobby.game.viewFor(0).currentTurn === player) {
+      lobby.game.completeTimedOutTurn(player, `${lobby.seats[player].displayName} left the game; their turn was completed automatically.`);
+    } else {
+      lobby.game.noteEvent("TIMEOUT", `${lobby.seats[player].displayName} left the game.`, player);
+    }
+    this.scheduleBotAction(lobby);
+    this.resetTurnDeadline(lobby);
+  }
+
+  public returnToLobby(lobbyId: string, userId: string): LobbySnapshot {
+    const lobby = this.requireLobby(lobbyId);
+    if (!lobby.seats.some((seat) => seat.userId === userId)) throw new Error("This user is not in the lobby.");
+    if (lobby.status !== "FINISHED") throw new Error("The current round has not finished.");
+    lobby.status = "WAITING";
+    lobby.game = null;
+    lobby.turnDeadlineAt = null;
+    lobby.nextBotActionAt = null;
+    return this.snapshot(lobby, userId);
   }
 
   public resetTurnActions(lobbyId: string, userId: string): LobbySnapshot {
@@ -118,15 +194,22 @@ export class LobbyService {
     const player = this.requireHumanPlayer(lobby, userId);
     const turnBefore = lobby.game.viewFor(player).turnNumber;
     const response = lobby.game.dispatch(player, request);
-    if (response.result.ok) this.advanceBots(lobby);
-    if (response.result.ok && lobby.status === "PLAYING" && lobby.game.viewFor(player).turnNumber !== turnBefore) this.resetTurnDeadline(lobby);
-    if (lobby.game.viewFor(player).phase === "GAME_OVER") lobby.status = "FINISHED";
+    if (response.result.ok && lobby.status === "PLAYING" && lobby.game.viewFor(player).turnNumber !== turnBefore) {
+      lobby.seats[player].consecutiveTimeouts = 0;
+      this.resetTurnDeadline(lobby);
+    }
+    if (lobby.game.viewFor(player).phase === "GAME_OVER") this.finishRound(lobby);
+    else if (response.result.ok) this.scheduleBotAction(lobby);
     return { result: response.result, view: lobby.game.viewFor(player) };
   }
 
   public getLobby(lobbyId: string, userId: string): LobbySnapshot {
     const lobby = this.requireLobby(lobbyId);
-    if (lobby.status === "PLAYING" && lobby.game) this.advanceExpiredTurn(lobby as LobbyRecord & { game: AuthoritativeGame });
+    if (lobby.status === "PLAYING" && lobby.game) {
+      const activeLobby = lobby as LobbyRecord & { game: AuthoritativeGame };
+      this.advanceExpiredTurn(activeLobby);
+      if (lobby.status === "PLAYING") this.advanceDueBot(activeLobby);
+    }
     return this.snapshot(lobby, userId);
   }
 
@@ -157,10 +240,12 @@ export class LobbyService {
       visibility,
       status: "WAITING",
       hostUserId: userId,
-      settings: { maxPlayers, turnTimeLimitMs: settings.turnTimeLimitMs === undefined ? 60_000 : settings.turnTimeLimitMs },
+      settings: { maxPlayers, turnTimeLimitMs: settings.turnTimeLimitMs === undefined ? 60_000 : settings.turnTimeLimitMs, scoringMode: settings.scoringMode ?? "ROUNDS" },
       turnDeadlineAt: null,
-      seats: [{ userId, displayName, isBot: false }],
+      roundNumber: 0,
+      seats: [{ userId, displayName, isBot: false, replacedHuman: false, consecutiveTimeouts: 0, wins: 0, score: 0 }],
       game: null,
+      nextBotActionAt: null,
     };
     this.#lobbies.set(id, lobby);
     return lobby;
@@ -169,20 +254,22 @@ export class LobbyService {
   private joinLobby(lobby: LobbyRecord, userId: string, displayName: string): void {
     assertUser(userId, displayName);
     if (lobby.status !== "WAITING") throw new Error("The lobby has already started.");
+    if (lobby.roundNumber > 0) throw new Error("Seats cannot change after a match has started.");
     if (lobby.seats.some((seat) => seat.userId === userId)) throw new Error("This user is already in the lobby.");
     if (lobby.seats.length >= lobby.settings.maxPlayers) throw new Error("The lobby is full.");
-    lobby.seats.push({ userId, displayName, isBot: false });
+    lobby.seats.push({ userId, displayName, isBot: false, replacedHuman: false, consecutiveTimeouts: 0, wins: 0, score: 0 });
   }
 
   private startRecord(lobby: LobbyRecord): void {
     if (lobby.status !== "WAITING") throw new Error("The lobby has already started.");
     if (lobby.seats.length < 2) throw new Error("At least two players are required.");
+    lobby.roundNumber += 1;
     lobby.game = new AuthoritativeGame(lobby.seats.length, {
       random: this.#random,
       turnTimeLimitMs: lobby.settings.turnTimeLimitMs,
     });
     lobby.status = "PLAYING";
-    this.advanceBots(lobby);
+    this.scheduleBotAction(lobby);
     this.resetTurnDeadline(lobby);
   }
 
@@ -204,47 +291,102 @@ export class LobbyService {
     return player;
   }
 
-  private advanceBots(lobby: LobbyRecord): void {
+  private scheduleBotAction(lobby: LobbyRecord): void {
     const game = lobby.game;
-    if (!game) throw new Error("Cannot advance bots before a game exists.");
-    for (let step = 0; step < 500; step++) {
-      const observer = game.viewFor(0);
-      if (observer.phase === "GAME_OVER") {
-        lobby.status = "FINISHED";
-        return;
-      }
-      const botSeat = lobby.seats[observer.currentTurn];
-      if (!botSeat?.isBot) return;
-      const action = chooseBotAction(game.viewFor(observer.currentTurn));
-      if (!action) throw new Error("The bot could not choose a legal action.");
-      const request = Object.fromEntries(
-        Object.entries(action).filter(([key]) => key !== "player"),
-      ) as PlayerActionRequest;
-      const response = game.dispatch(observer.currentTurn, request);
-      if (!response.result.ok) throw new Error(`Bot action failed: ${response.result.error}`);
+    if (!game || lobby.status !== "PLAYING") {
+      lobby.nextBotActionAt = null;
+      return;
     }
-    throw new Error("Bot advancement exceeded its safety limit.");
+    const observer = game.viewFor(0);
+    lobby.nextBotActionAt = observer.phase !== "GAME_OVER" && lobby.seats[observer.currentTurn]?.isBot
+      ? Date.now() + BOT_ACTION_DELAY_MS
+      : null;
+  }
+
+  private advanceDueBot(lobby: LobbyRecord & { game: AuthoritativeGame }): void {
+    const observer = lobby.game.viewFor(0);
+    if (observer.phase === "GAME_OVER") {
+      this.finishRound(lobby);
+      return;
+    }
+    if (!lobby.seats[observer.currentTurn]?.isBot) {
+      lobby.nextBotActionAt = null;
+      return;
+    }
+    if (lobby.nextBotActionAt === null) {
+      this.scheduleBotAction(lobby);
+      return;
+    }
+    if (Date.now() < lobby.nextBotActionAt) return;
+
+    const action = chooseBotAction(lobby.game.viewFor(observer.currentTurn));
+    if (!action) throw new Error("The bot could not choose a legal action.");
+    const request = Object.fromEntries(
+      Object.entries(action).filter(([key]) => key !== "player"),
+    ) as PlayerActionRequest;
+    const response = lobby.game.dispatch(observer.currentTurn, request);
+    if (!response.result.ok) throw new Error(`Bot action failed: ${response.result.error}`);
+
+    if (lobby.game.viewFor(0).phase === "GAME_OVER") this.finishRound(lobby);
+    else {
+      this.scheduleBotAction(lobby);
+      this.resetTurnDeadline(lobby);
+    }
+  }
+
+  private finishRound(lobby: LobbyRecord): void {
+    if (lobby.status === "FINISHED" || !lobby.game) return;
+    const view = lobby.game.viewFor(0);
+    if (view.phase !== "GAME_OVER" || view.winner === null) return;
+    lobby.seats[view.winner].wins += 1;
+    if (lobby.settings.scoringMode === "VALUES") {
+      const penalties = lobby.game.roundPenalties();
+      lobby.seats.forEach((seat, player) => { seat.score += penalties[player] ?? 0; });
+    }
+    lobby.status = "FINISHED";
+    lobby.turnDeadlineAt = null;
+    lobby.nextBotActionAt = null;
+  }
+
+  private finishIfLastHuman(lobby: LobbyRecord): boolean {
+    if (lobby.status !== "PLAYING" || !lobby.game) return false;
+    const activeHumans = lobby.seats
+      .map((seat, player) => ({ seat, player }))
+      .filter(({ seat }) => !seat.isBot);
+    if (activeHumans.length !== 1 || !lobby.seats.some((seat) => seat.replacedHuman)) return false;
+    const survivor = activeHumans[0];
+    lobby.game.completeByForfeit(
+      survivor.player,
+      `${survivor.seat.displayName} won as the last active player.`,
+    );
+    this.finishRound(lobby);
+    return true;
   }
 
   private advanceExpiredTurn(lobby: LobbyRecord & { game: AuthoritativeGame }): void {
     if (lobby.turnDeadlineAt === null || Date.now() < lobby.turnDeadlineAt) return;
     const expiredPlayer = lobby.game.viewFor(0).currentTurn;
-    for (let step = 0; step < 100; step++) {
-      const view = lobby.game.viewFor(expiredPlayer);
-      if (view.phase === "GAME_OVER" || view.currentTurn !== expiredPlayer) break;
-      const action = chooseBotAction(view);
-      if (!action) throw new Error("The timed-out turn could not be completed automatically.");
-      const request = Object.fromEntries(Object.entries(action).filter(([key]) => key !== "player")) as PlayerActionRequest;
-      const response = lobby.game.dispatch(expiredPlayer, request);
-      if (!response.result.ok) throw new Error(`Timed-out action failed: ${response.result.error}`);
+    const seat = lobby.seats[expiredPlayer];
+    seat.consecutiveTimeouts += 1;
+    const replaced = !seat.isBot && seat.consecutiveTimeouts >= 3;
+    const message = replaced
+      ? `${seat.displayName} timed out for the third consecutive turn and was replaced by a bot.`
+      : `${seat.displayName} timed out (${seat.consecutiveTimeouts}/3); their turn was skipped.`;
+    lobby.game.completeTimedOutTurn(expiredPlayer, message);
+    if (replaced) {
+      seat.isBot = true;
+      seat.replacedHuman = true;
+      if (this.finishIfLastHuman(lobby)) return;
     }
-    this.advanceBots(lobby);
-    if (lobby.game.viewFor(0).phase === "GAME_OVER") lobby.status = "FINISHED";
+    if (lobby.game.viewFor(0).phase === "GAME_OVER") this.finishRound(lobby);
+    else this.scheduleBotAction(lobby);
     this.resetTurnDeadline(lobby);
   }
 
   private resetTurnDeadline(lobby: LobbyRecord): void {
-    lobby.turnDeadlineAt = lobby.status === "PLAYING" && lobby.settings.turnTimeLimitMs !== null
+    const view = lobby.game?.viewFor(0);
+    const isHumanTurn = view && !lobby.seats[view.currentTurn]?.isBot;
+    lobby.turnDeadlineAt = lobby.status === "PLAYING" && lobby.settings.turnTimeLimitMs !== null && isHumanTurn
       ? Date.now() + lobby.settings.turnTimeLimitMs
       : null;
   }
@@ -261,6 +403,7 @@ export class LobbyService {
       hostUserId: lobby.hostUserId,
       settings: { ...lobby.settings },
       turnDeadlineAt: lobby.turnDeadlineAt,
+      roundNumber: lobby.roundNumber,
       seats: structuredClone(lobby.seats),
       game: lobby.game ? lobby.game.viewFor(player) : null,
     };

@@ -30,13 +30,13 @@ import { canTakeDiscardForOpening } from "./engine/opening";
 import { createPlayerView } from "./engine/playerView";
 import { applyAction, initGame } from "./engine/state";
 import type { CardDTO, CardID, GameState, Meld } from "./engine/types";
-import { addFriendLobbyBot, createFriendLobby, getFriendLobby, joinFriendLobby, startFriendLobby } from "./online/friendsClient";
+import { addFriendLobbyBot, createFriendLobby, getFriendLobby, joinFriendLobby, leaveFriendLobby, removeFriendLobbySeat, startFriendLobby, updateFriendLobbySettings } from "./online/friendsClient";
 import type { LobbySnapshot } from "./online/lobbyService";
 import { cardAssetPath, cardBackAssetPath } from "./ui/cardAssets";
 
 const HUMAN_ID = 0;
 type AppScreen = "HOME" | "BOTS" | "ONLINE" | "FRIENDS" | "SETTINGS" | "GAME";
-type FriendsStep = "CHOICE" | "CREATE" | "JOIN" | "LOBBY";
+type FriendsStep = "CHOICE" | "JOIN" | "LOBBY";
 type StoredFriendSession = { userId: string; displayName: string; lobbyId: string; inviteCode: string };
 const FRIEND_SESSION_BASE_KEY = "card51.friend-session.v1";
 const TAB_NAME_PREFIX = "card51-tab:";
@@ -105,6 +105,14 @@ function cardLabel(card: CardDTO): string {
 
 function cloneState(state: GameState): GameState {
   return structuredClone(state);
+}
+
+function ModeIcon({ type, className = "mode-icon" }: { type: "online" | "friends" | "bots"; className?: string }) {
+  return <span className={className} aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+    {type === "online" && <><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c2.4 2.5 3.6 5.5 3.6 9S14.4 18.5 12 21M12 3c-2.4 2.5-3.6 5.5-3.6 9S9.6 18.5 12 21" /></>}
+    {type === "friends" && <><circle cx="9" cy="8" r="3" /><path d="M3.5 19c.5-3.5 2.3-5.5 5.5-5.5s5 2 5.5 5.5" /><circle cx="17" cy="9" r="2.3" /><path d="M15.2 14.4c3.3-.8 5.1.8 5.5 3.6" /></>}
+    {type === "bots" && <><path d="M12 3v3M9.5 3h5" /><rect x="3" y="6" width="18" height="14" rx="3" /><circle cx="8.5" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="15.5" cy="12" r="1" fill="currentColor" stroke="none" /><path d="M8 16h8M3 11H1.5M22.5 11H21" /></>}
+  </svg></span>;
 }
 
 function CardView({
@@ -303,8 +311,6 @@ function App() {
   const [friendUserId] = useState(() => initialFriendSession?.userId ?? crypto.randomUUID());
   const [friendName, setFriendName] = useState(initialFriendSession?.displayName ?? "");
   const [friendCode, setFriendCode] = useState(initialFriendSession?.inviteCode ?? initialInviteCode);
-  const [friendMaxPlayers, setFriendMaxPlayers] = useState<2 | 3 | 4>(4);
-  const [friendTurnTimeLimitMs, setFriendTurnTimeLimitMs] = useState<number | null>(60_000);
   const friendTurnPickerRef = useRef<HTMLDetailsElement>(null);
   const [friendLobby, setFriendLobby] = useState<LobbySnapshot | null>(null);
   const [friendBusy, setFriendBusy] = useState(false);
@@ -738,6 +744,7 @@ function App() {
   }
 
   function returnHome(): void {
+    if (friendLobby && friendLobby.status !== "FINISHED") void leaveFriendLobby(friendLobby.id, friendUserId).catch(() => undefined);
     setActiveDragId(null);
     setDragOverId(null);
     setTableMotion(null);
@@ -773,16 +780,17 @@ function App() {
     returnHome();
   }
 
-  async function createFriendsRoom(event: FormEvent): Promise<void> {
-    event.preventDefault();
+  async function createFriendsRoom(): Promise<void> {
     setFriendBusy(true);
     setFriendError("");
     try {
-      const lobby = await createFriendLobby(friendUserId, friendName, friendMaxPlayers, friendTurnTimeLimitMs);
+      const displayName = friendName.trim() || "Host";
+      const lobby = await createFriendLobby(friendUserId, displayName);
+      setFriendName(displayName);
       setFriendLobby(lobby);
       setFriendCode(lobby.inviteCode);
       setFriendsStep("LOBBY");
-      writeFriendSession({ userId: friendUserId, displayName: friendName.trim(), lobbyId: lobby.id, inviteCode: lobby.inviteCode });
+      writeFriendSession({ userId: friendUserId, displayName, lobbyId: lobby.id, inviteCode: lobby.inviteCode });
       window.history.replaceState({}, "", lobby.invitePath);
     } catch (requestError) {
       setFriendError(requestError instanceof Error ? requestError.message : "Could not create the room.");
@@ -822,6 +830,32 @@ function App() {
     }
   }
 
+  async function removeSeatFromFriendsRoom(targetUserId: string): Promise<void> {
+    if (!friendLobby) return;
+    setFriendBusy(true);
+    setFriendError("");
+    try {
+      setFriendLobby(await removeFriendLobbySeat(friendLobby.id, friendUserId, targetUserId));
+    } catch (requestError) {
+      setFriendError(requestError instanceof Error ? requestError.message : "Could not remove that player.");
+    } finally {
+      setFriendBusy(false);
+    }
+  }
+
+  async function updateFriendsRoomSettings(turnTimeLimitMs: number | null, scoringMode: "ROUNDS" | "VALUES"): Promise<void> {
+    if (!friendLobby) return;
+    setFriendBusy(true);
+    setFriendError("");
+    try {
+      setFriendLobby(await updateFriendLobbySettings(friendLobby.id, friendUserId, turnTimeLimitMs, scoringMode));
+    } catch (requestError) {
+      setFriendError(requestError instanceof Error ? requestError.message : "Could not update the table rules.");
+    } finally {
+      setFriendBusy(false);
+    }
+  }
+
   async function startFriendsRoom(): Promise<void> {
     if (!friendLobby) return;
     setFriendBusy(true);
@@ -843,6 +877,7 @@ function App() {
   }
 
   function leaveFriendsRoom(): void {
+    if (friendLobby && friendLobby.status !== "FINISHED") void leaveFriendLobby(friendLobby.id, friendUserId).catch(() => undefined);
     setFriendLobby(null);
     setFriendError("");
     setFriendsStep("CHOICE");
@@ -874,7 +909,7 @@ function App() {
     || JSON.stringify(gameState.tableMelds) !== JSON.stringify(turnBaseline.tableMelds)
   ));
 
-  if (screen === "FRIENDS" && friendLobby?.status === "PLAYING") {
+  if (screen === "FRIENDS" && friendLobby?.game) {
     return <FriendsGame lobby={friendLobby} userId={friendUserId} onLobby={setFriendLobby} onLeave={returnHome} onSettings={openSettings} />;
   }
 
@@ -911,17 +946,17 @@ function App() {
               </div>
               <div className="mode-grid">
                 <button type="button" className="mode-card mode-online" onClick={() => setScreen("ONLINE")}>
-                  <span className="mode-icon" aria-hidden="true">◎</span>
+                  <ModeIcon type="online" />
                   <span className="mode-copy"><small>Quick match</small><strong>Play online</strong><span>Find a table and play against other Card51 players.</span></span>
                   <span className="mode-arrow" aria-hidden="true">→</span>
                 </button>
                 <button type="button" className="mode-card mode-friends" onClick={() => setScreen("FRIENDS")}>
-                  <span className="mode-icon" aria-hidden="true">♣</span>
+                  <ModeIcon type="friends" />
                   <span className="mode-copy"><small>Private table</small><strong>Play with friends</strong><span>Create a room or join one with an invite code.</span></span>
                   <span className="mode-arrow" aria-hidden="true">→</span>
                 </button>
                 <button type="button" className="mode-card mode-bots" onClick={() => setScreen("BOTS")}>
-                  <span className="mode-icon" aria-hidden="true">◆</span>
+                  <ModeIcon type="bots" />
                   <span className="mode-copy"><small>Ready now</small><strong>Play against bots</strong><span>Choose your opponents and start immediately.</span></span>
                   <span className="mode-arrow" aria-hidden="true">→</span>
                 </button>
@@ -934,7 +969,7 @@ function App() {
 
             {screen === "BOTS" && (
               <div className="setup-card bot-setup">
-                <div className="setup-icon" aria-hidden="true">◆</div>
+                <ModeIcon type="bots" className="setup-icon" />
                 <p className="eyebrow">Solo table</p>
                 <h1>Play against bots</h1>
                 <p>Pick how many opponents you want at the table.</p>
@@ -957,7 +992,7 @@ function App() {
 
             {screen === "ONLINE" && (
               <div className="setup-card future-mode">
-                <div className="setup-icon" aria-hidden="true">◎</div>
+                <ModeIcon type="online" className="setup-icon" />
                 <p className="eyebrow">Quick match</p>
                 <h1>Play online</h1>
                 <p>Matchmaking will connect you with an open Card51 table. The game rules and secure multiplayer foundation are ready; the live connection screen is next.</p>
@@ -968,40 +1003,18 @@ function App() {
 
             {screen === "FRIENDS" && (
               <div className={`setup-card friends-setup friends-${friendsStep.toLowerCase()} ${friendLobby?.status === "PLAYING" ? "friends-playing" : ""}`}>
-                <div className="setup-icon" aria-hidden="true">♣</div>
+                <ModeIcon type="friends" className="setup-icon" />
                 <p className="eyebrow">Private table</p>
                 {friendsStep === "CHOICE" && (
                   <>
                     <h1>Play with friends</h1>
                     <p>Create a private Card51 room or enter the six-character code from a friend.</p>
                     <div className="friend-choice-grid">
-                      <button type="button" onClick={() => setFriendsStep("CREATE")}><strong>Create a room</strong><span>Host a new private table</span></button>
+                      <button type="button" disabled={friendBusy} onClick={() => createFriendsRoom()}><strong>{friendBusy ? "Creating…" : "Create a room"}</strong><span>Open a private table instantly</span></button>
                       <button type="button" onClick={() => setFriendsStep("JOIN")}><strong>Join a room</strong><span>Use a friend's invite code</span></button>
                     </div>
-                  </>
-                )}
-
-                {friendsStep === "CREATE" && (
-                  <form className="friend-form" onSubmit={createFriendsRoom}>
-                    <h1>Create a room</h1>
-                    <p>Choose the name your friends will see and the table rules.</p>
-                    <label>Display name<input required maxLength={24} autoComplete="nickname" value={friendName} onChange={(event) => setFriendName(event.target.value)} placeholder="Your name" /></label>
-                    <fieldset className="friend-size-picker">
-                      <legend>Seats at the table</legend>
-                      {([2, 3, 4] as const).map((count) => <button key={count} type="button" aria-pressed={friendMaxPlayers === count} onClick={() => setFriendMaxPlayers(count)}>{count}</button>)}
-                    </fieldset>
-                    <fieldset className="turn-time-field">
-                      <legend>Turn time</legend>
-                      <details ref={friendTurnPickerRef} className="turn-time-picker">
-                        <summary>{TURN_TIME_OPTIONS.find((option) => option.value === friendTurnTimeLimitMs)?.label ?? "Choose a turn time"}<span aria-hidden="true" /></summary>
-                        <div className="turn-time-options" role="listbox" aria-label="Turn time">
-                          {TURN_TIME_OPTIONS.map((option) => <button key={option.label} type="button" role="option" aria-selected={option.value === friendTurnTimeLimitMs} onClick={() => { setFriendTurnTimeLimitMs(option.value); friendTurnPickerRef.current?.removeAttribute("open"); }}><span>{option.label}</span>{option.value === friendTurnTimeLimitMs && <i aria-hidden="true">✓</i>}</button>)}
-                        </div>
-                      </details>
-                    </fieldset>
                     {friendError && <p className="friend-error" role="alert">{friendError}</p>}
-                    <button type="submit" className="gold-button start-game-button" disabled={friendBusy}>{friendBusy ? "Creating…" : "Create private room"}</button>
-                  </form>
+                  </>
                 )}
 
                 {friendsStep === "JOIN" && (
@@ -1020,9 +1033,12 @@ function App() {
                 )}
 
                 {friendsStep === "LOBBY" && friendLobby && (() => {
-                  if (friendLobby.status === "PLAYING") return <FriendsGame lobby={friendLobby} userId={friendUserId} onLobby={setFriendLobby} onLeave={returnHome} onSettings={openSettings} />;
+                  if (friendLobby.game) return <FriendsGame lobby={friendLobby} userId={friendUserId} onLobby={setFriendLobby} onLeave={returnHome} onSettings={openSettings} />;
                   const isHost = friendLobby.hostUserId === friendUserId;
                   const canStart = isHost && friendLobby.seats.length >= 2;
+                  const viewerSeatIndex = Math.max(0, friendLobby.seats.findIndex((seat) => seat.userId === friendUserId));
+                  const seatSlots = [...friendLobby.seats, ...Array.from({ length: friendLobby.settings.maxPlayers - friendLobby.seats.length }, () => null)];
+                  const previewSeats = Array.from({ length: friendLobby.settings.maxPlayers }, (_, offset) => seatSlots[(viewerSeatIndex + offset) % friendLobby.settings.maxPlayers]);
                   return (
                     <div className="friend-lobby">
                       <h1>{friendLobby.status === "WAITING" ? "Your room" : "Game started"}</h1>
@@ -1031,24 +1047,24 @@ function App() {
                         <strong>{friendLobby.inviteCode}</strong>
                         <button type="button" onClick={copyFriendsInvite}>{inviteCopied ? "Copied!" : "Copy invite link"}</button>
                       </div>
-                      <div className="lobby-rule"><span>Turn time</span><strong>{friendLobby.settings.turnTimeLimitMs === null ? "No limit" : `${friendLobby.settings.turnTimeLimitMs / 1000} seconds`}</strong></div>
+                      {isHost && friendLobby.roundNumber === 0 ? <div className="lobby-settings-editor">
+                        <fieldset className="turn-time-field"><legend>Turn time</legend><details ref={friendTurnPickerRef} className="turn-time-picker"><summary>{TURN_TIME_OPTIONS.find((option) => option.value === friendLobby.settings.turnTimeLimitMs)?.label ?? "Choose a turn time"}<span aria-hidden="true" /></summary><div className="turn-time-options" role="listbox" aria-label="Turn time">{TURN_TIME_OPTIONS.map((option) => <button key={option.label} type="button" role="option" disabled={friendBusy} aria-selected={option.value === friendLobby.settings.turnTimeLimitMs} onClick={() => { friendTurnPickerRef.current?.removeAttribute("open"); void updateFriendsRoomSettings(option.value, friendLobby.settings.scoringMode); }}><span>{option.label}</span>{option.value === friendLobby.settings.turnTimeLimitMs && <i aria-hidden="true">✓</i>}</button>)}</div></details></fieldset>
+                        <fieldset className="scoring-mode-picker lobby-scoring-picker"><legend>Game mode</legend><button type="button" disabled={friendBusy} aria-pressed={friendLobby.settings.scoringMode === "ROUNDS"} onClick={() => updateFriendsRoomSettings(friendLobby.settings.turnTimeLimitMs, "ROUNDS")}><strong>Round wins</strong><span>Count hands won</span></button><button type="button" disabled={friendBusy} aria-pressed={friendLobby.settings.scoringMode === "VALUES"} onClick={() => updateFriendsRoomSettings(friendLobby.settings.turnTimeLimitMs, "VALUES")}><strong>Card values</strong><span>Lowest total leads</span></button></fieldset>
+                      </div> : <><div className="lobby-rule"><span>Turn time</span><strong>{friendLobby.settings.turnTimeLimitMs === null ? "No limit" : `${friendLobby.settings.turnTimeLimitMs / 1000} seconds`}</strong></div><div className="lobby-rule"><span>Game mode</span><strong>{friendLobby.settings.scoringMode === "VALUES" ? `Card values · ${friendLobby.roundNumber} ${friendLobby.roundNumber === 1 ? "round" : "rounds"} played` : "Round wins"}</strong></div></>}
                       <div className="lobby-heading"><span>Players</span><strong>{friendLobby.seats.length} / {friendLobby.settings.maxPlayers}</strong></div>
-                      <div className="lobby-seats">
-                        {Array.from({ length: friendLobby.settings.maxPlayers }, (_, index) => {
-                          const seat = friendLobby.seats[index];
-                          return seat ? (
-                            <div className="lobby-seat filled" key={seat.userId}>
-                              <span>{seat.isBot ? "B" : seat.displayName.slice(0, 1).toUpperCase()}</span>
-                              <div><strong>{seat.displayName}</strong><small>{seat.userId === friendLobby.hostUserId ? "Host" : seat.isBot ? "Bot" : "Ready"}</small></div>
-                            </div>
-                          ) : <div className="lobby-seat empty" key={index}><span>+</span><div><strong>Open seat</strong><small>Waiting for a player</small></div></div>;
-                        })}
+                      <div className={`table-preview friend-table-preview lobby-size-${friendLobby.settings.maxPlayers}`} aria-label={`${friendLobby.seats.length} of ${friendLobby.settings.maxPlayers} seats filled`}>
+                        <i>51</i><span className="preview-count">{friendLobby.seats.length} / {friendLobby.settings.maxPlayers} seated</span>
+                        {previewSeats.map((seat, index) => <div className={`friend-preview-seat preview-position-${index} ${index === 0 ? "you" : ""} ${seat ? "filled" : "empty"}`} key={seat?.userId ?? `open-${index}`}>
+                          <b>{seat ? seat.isBot ? "B" : seat.displayName.slice(0, 1).toUpperCase() : "+"}</b>
+                          <span><strong>{seat?.displayName ?? "Open seat"}</strong><small>{seat ? `${seat.userId === friendLobby.hostUserId ? "Host" : seat.isBot ? "Bot" : "Ready"} · ${friendLobby.settings.scoringMode === "VALUES" ? `${seat.score} pts` : `${seat.wins} ${seat.wins === 1 ? "win" : "wins"}`}` : "Waiting"}</small></span>
+                          {isHost && seat && seat.userId !== friendLobby.hostUserId && friendLobby.roundNumber === 0 && <button type="button" className="preview-seat-remove" disabled={friendBusy} aria-label={`Remove ${seat.displayName}`} title={`Remove ${seat.displayName}`} onClick={() => removeSeatFromFriendsRoom(seat.userId)}>×</button>}
+                        </div>)}
                       </div>
                       {friendError && <p className="friend-error" role="alert">{friendError}</p>}
                       {isHost ? (
                         <div className="lobby-controls">
-                          <button type="button" disabled={friendBusy || friendLobby.seats.length >= friendLobby.settings.maxPlayers} onClick={addBotToFriendsRoom}>Add bot</button>
-                          <button type="button" className="gold-button" disabled={friendBusy || !canStart} onClick={startFriendsRoom}>{friendBusy ? "Starting…" : "Start game"}</button>
+                          <button type="button" disabled={friendBusy || friendLobby.roundNumber > 0 || friendLobby.seats.length >= friendLobby.settings.maxPlayers} onClick={addBotToFriendsRoom}>Add bot</button>
+                          <button type="button" className="gold-button" disabled={friendBusy || !canStart} onClick={startFriendsRoom}>{friendBusy ? "Starting…" : friendLobby.roundNumber > 0 ? "Start next round" : "Start game"}</button>
                         </div>
                       ) : <p className="waiting-host">Waiting for the host to start the game…</p>}
                     </div>

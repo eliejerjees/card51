@@ -43,10 +43,11 @@ function friendsApi(): Plugin {
             if (![2, 3, 4].includes(maxPlayers)) throw new Error("Choose between two and four players.");
             const turnTimeLimitMs = body.turnTimeLimitMs === null ? null : Number(body.turnTimeLimitMs ?? 60_000);
             if (turnTimeLimitMs !== null && ![30_000, 60_000, 90_000, 120_000].includes(turnTimeLimitMs)) throw new Error("Choose a supported turn time limit.");
+            const scoringMode = body.scoringMode === "VALUES" ? "VALUES" : "ROUNDS";
             const lobby = friendsLobbies.createPrivateLobby(
               requireString(body.userId, "User ID"),
               requireString(body.displayName, "Display name"),
-              { maxPlayers: maxPlayers as 2 | 3 | 4, turnTimeLimitMs },
+              { maxPlayers: maxPlayers as 2 | 3 | 4, turnTimeLimitMs, scoringMode },
             );
             return sendJson(response, 201, { lobby });
           }
@@ -76,10 +77,45 @@ function friendsApi(): Plugin {
             return sendJson(response, 200, { lobby });
           }
 
+          if (request.method === "POST" && operation === "remove") {
+            const body = await readJson(request);
+            const lobby = friendsLobbies.removeSeat(
+              lobbyId,
+              requireString(body.userId, "User ID"),
+              requireString(body.targetUserId, "Target user ID"),
+            );
+            return sendJson(response, 200, { lobby });
+          }
+
+          if (request.method === "POST" && operation === "settings") {
+            const body = await readJson(request);
+            const turnTimeLimitMs = body.turnTimeLimitMs === null ? null : Number(body.turnTimeLimitMs);
+            if (turnTimeLimitMs !== null && ![30_000, 60_000, 90_000, 120_000].includes(turnTimeLimitMs)) throw new Error("Choose a supported turn time limit.");
+            const scoringMode = body.scoringMode === "VALUES" ? "VALUES" : "ROUNDS";
+            const lobby = friendsLobbies.updateSettings(
+              lobbyId,
+              requireString(body.userId, "User ID"),
+              { turnTimeLimitMs, scoringMode },
+            );
+            return sendJson(response, 200, { lobby });
+          }
+
           if (request.method === "POST" && operation === "start") {
             const body = await readJson(request);
             const lobby = friendsLobbies.start(lobbyId, requireString(body.userId, "User ID"));
             return sendJson(response, 200, { lobby });
+          }
+
+          if (request.method === "POST" && operation === "return") {
+            const body = await readJson(request);
+            const lobby = friendsLobbies.returnToLobby(lobbyId, requireString(body.userId, "User ID"));
+            return sendJson(response, 200, { lobby });
+          }
+
+          if (request.method === "POST" && operation === "leave") {
+            const body = await readJson(request);
+            friendsLobbies.leave(lobbyId, requireString(body.userId, "User ID"));
+            return sendJson(response, 200, { ok: true });
           }
 
           if (request.method === "POST" && operation === "action") {

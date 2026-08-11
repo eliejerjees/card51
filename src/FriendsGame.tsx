@@ -1,5 +1,5 @@
 import { GameTable } from "./GameTable";
-import { dispatchFriendAction, resetFriendTurn } from "./online/friendsClient";
+import { dispatchFriendAction, resetFriendTurn, returnFriendLobby } from "./online/friendsClient";
 import type { LobbySnapshot } from "./online/lobbyService";
 
 export function FriendsGame({ lobby, userId, onLobby, onLeave, onSettings }: { lobby: LobbySnapshot; userId: string; onLobby: (lobby: LobbySnapshot) => void; onLeave: () => void; onSettings: () => void }) {
@@ -7,7 +7,7 @@ export function FriendsGame({ lobby, userId, onLobby, onLeave, onSettings }: { l
 
   return <GameTable
     game={lobby.game}
-    players={lobby.seats.map((seat, id) => ({ id, name: seat.displayName, avatar: seat.isBot ? "B" : undefined }))}
+    players={lobby.seats.map((seat, id) => ({ id, name: seat.displayName, avatar: seat.isBot ? "B" : undefined, statusNote: seat.isBot ? "Bot" : seat.consecutiveTimeouts > 0 ? `Timeout ${seat.consecutiveTimeouts}/3` : undefined, scoreLabel: lobby.settings.scoringMode === "VALUES" ? `${seat.score} pts` : `${seat.wins} ${seat.wins === 1 ? "win" : "wins"}` }))}
     modeLabel={`Friends · ${lobby.inviteCode}`}
     turnDeadlineAt={lobby.turnDeadlineAt}
     onAction={async (request) => {
@@ -24,5 +24,7 @@ export function FriendsGame({ lobby, userId, onLobby, onLeave, onSettings }: { l
     }}
     onLeave={onLeave}
     onSettings={onSettings}
+    onPlayAgain={async () => onLobby(await returnFriendLobby(lobby.id, userId))}
+    playAgainLabel="Return to lobby"
   />;
 }

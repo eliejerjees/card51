@@ -13,10 +13,10 @@ async function requestLobby(path: string, init?: RequestInit): Promise<LobbySnap
   return payload.lobby;
 }
 
-export function createFriendLobby(userId: string, displayName: string, maxPlayers: 2 | 3 | 4, turnTimeLimitMs: number | null): Promise<LobbySnapshot> {
+export function createFriendLobby(userId: string, displayName: string): Promise<LobbySnapshot> {
   return requestLobby("/api/friends/create", {
     method: "POST",
-    body: JSON.stringify({ userId, displayName, maxPlayers, turnTimeLimitMs }),
+    body: JSON.stringify({ userId, displayName, maxPlayers: 4 }),
   });
 }
 
@@ -38,11 +38,45 @@ export function addFriendLobbyBot(lobbyId: string, userId: string): Promise<Lobb
   });
 }
 
+export function removeFriendLobbySeat(lobbyId: string, userId: string, targetUserId: string): Promise<LobbySnapshot> {
+  return requestLobby(`/api/friends/${encodeURIComponent(lobbyId)}/remove`, {
+    method: "POST",
+    body: JSON.stringify({ userId, targetUserId }),
+  });
+}
+
+export function updateFriendLobbySettings(lobbyId: string, userId: string, turnTimeLimitMs: number | null, scoringMode: "ROUNDS" | "VALUES"): Promise<LobbySnapshot> {
+  return requestLobby(`/api/friends/${encodeURIComponent(lobbyId)}/settings`, {
+    method: "POST",
+    body: JSON.stringify({ userId, turnTimeLimitMs, scoringMode }),
+  });
+}
+
 export function startFriendLobby(lobbyId: string, userId: string): Promise<LobbySnapshot> {
   return requestLobby(`/api/friends/${encodeURIComponent(lobbyId)}/start`, {
     method: "POST",
     body: JSON.stringify({ userId }),
   });
+}
+
+export function returnFriendLobby(lobbyId: string, userId: string): Promise<LobbySnapshot> {
+  return requestLobby(`/api/friends/${encodeURIComponent(lobbyId)}/return`, {
+    method: "POST",
+    body: JSON.stringify({ userId }),
+  });
+}
+
+export async function leaveFriendLobby(lobbyId: string, userId: string): Promise<void> {
+  const response = await fetch(`/api/friends/${encodeURIComponent(lobbyId)}/leave`, {
+    method: "POST",
+    keepalive: true,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId }),
+  });
+  if (!response.ok) {
+    const payload = await response.json() as { error?: string };
+    throw new Error(payload.error || "Could not leave the lobby.");
+  }
 }
 
 export function dispatchFriendAction(lobbyId: string, userId: string, action: PlayerActionRequest): Promise<LobbySnapshot> {
