@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ButtonHTMLAttributes, type DragEvent as ReactDragEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type DragEvent as ReactDragEvent, type ReactNode } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -7,6 +7,7 @@ import {
   useSensor,
   useSensors,
   type DragEndEvent,
+  type DragOverEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
 import {
@@ -35,6 +36,8 @@ type TableMotion = {
   type: "DRAW_DECK" | "DRAW_DISCARD" | "DISCARD";
   player: number;
   cardId?: CardID;
+  from: { x: number; y: number };
+  to: { x: number; y: number };
 };
 
 const RANK_LABEL: Record<CardDTO["rank"], string> = {
@@ -105,31 +108,58 @@ function CardView({
 
 function SortableHandCard({
   id,
+  index,
+  activeIndex,
+  dragOverIndex,
+  recentDraw,
   card,
   selected,
   disabled,
   onClick,
   badge,
   onNativeDragStart,
+  onNativeDragOver,
   onNativeDrop,
   onNativeDragEnd,
+  onNodeRef,
 }: {
   id: CardID;
+  index: number;
+  activeIndex: number;
+  dragOverIndex: number;
+  recentDraw: boolean;
   card: CardDTO;
   selected: boolean;
   disabled: boolean;
   onClick: () => void;
   badge?: string;
   onNativeDragStart: (id: CardID) => void;
+  onNativeDragOver: (id: CardID) => void;
   onNativeDrop: (id: CardID) => void;
   onNativeDragEnd: () => void;
+  onNodeRef: (node: HTMLDivElement | null) => void;
 }) {
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const dragDistance = dragOverIndex < 0 ? 99 : Math.abs(index - dragOverIndex);
+  const dragDirection = index < dragOverIndex ? -1 : 1;
+  const dragLift = Math.max(0, 6 - dragDistance * 1.5);
+  const dragTilt = dragDirection * Math.max(0, 1.1 - dragDistance * 0.25);
+  const isInsertionTarget = activeIndex >= 0 && dragOverIndex === index && activeIndex !== dragOverIndex;
+  const insertionClass = !isInsertionTarget ? "" : activeIndex < dragOverIndex ? "drop-gap-after" : "drop-gap-before";
+  const slotTransition = [transition, "margin-left .2s cubic-bezier(.2,.82,.3,1)", "margin-right .2s cubic-bezier(.2,.82,.3,1)"].filter(Boolean).join(", ");
   return (
     <div
-      ref={setNodeRef}
-      className={`hand-card-slot ${isDragging ? "dragging" : ""}`}
-      style={{ transform: CSS.Transform.toString(transform), transition }}
+      ref={(node) => {
+        setNodeRef(node);
+        onNodeRef(node);
+      }}
+      className={`hand-card-slot ${isDragging ? "dragging" : ""} ${dragDistance <= 3 ? "drag-neighbor" : ""} ${recentDraw ? "recently-drawn" : ""} ${insertionClass}`}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition: slotTransition,
+        "--drag-lift": `${dragLift}px`,
+        "--drag-tilt": `${dragTilt}deg`,
+      } as CSSProperties}
     >
       <CardView
         card={card}
@@ -145,7 +175,10 @@ function SortableHandCard({
             event.dataTransfer.setData("text/plain", id);
             onNativeDragStart(id);
           },
-          onDragOver: (event) => event.preventDefault(),
+          onDragOver: (event) => {
+            event.preventDefault();
+            onNativeDragOver(id);
+          },
           onDrop: (event) => {
             event.preventDefault();
             onNativeDrop(id);
@@ -229,7 +262,16 @@ function App() {
   const [turnBaseline, setTurnBaseline] = useState<GameState | null>(null);
   const [manualOrder, setManualOrder] = useState<CardID[]>(() => gameState.playersPrivate[HUMAN_ID].hand);
   const [activeDragId, setActiveDragId] = useState<CardID | null>(null);
+  const [dragOverId, setDragOverId] = useState<CardID | null>(null);
+  const [recentDrawId, setRecentDrawId] = useState<CardID | null>(null);
   const [tableMotion, setTableMotion] = useState<TableMotion | null>(null);
+  const tableShellRef = useRef<HTMLDivElement>(null);
+  const drawPileRef = useRef<HTMLButtonElement>(null);
+  const discardPileRef = useRef<HTMLButtonElement>(null);
+  const handPanelRef = useRef<HTMLElement>(null);
+  const handCardsRef = useRef<HTMLDivElement>(null);
+  const handCardRefs = useRef(new Map<CardID, HTMLDivElement>());
+  const playerSeatRefs = useRef(new Map<number, HTMLDivElement>());
   const sensors = useSensors(
     useSensor(TouchSensor, { activationConstraint: { delay: 160, tolerance: 8 } }),
   );
@@ -289,11 +331,40 @@ function App() {
     });
   }, [gameState.cardsById, humanHand, manualOrder, sortMode]);
 
+  const createTableMotion = useCallback((type: TableMotion["type"], player: number, cardId?: CardID): TableMotion => {
+    const table = tableShellRef.current;
+    const playerTarget = player === HUMAN_ID
+      ? type !== "DISCARD" && cardId ? handCardRefs.current.get(cardId) ?? handPanelRef.current : handPanelRef.current
+      : playerSeatRefs.current.get(player);
+    const source = type === "DRAW_DECK"
+      ? drawPileRef.current
+      : type === "DRAW_DISCARD" ? discardPileRef.current : playerTarget;
+    const destination = type === "DISCARD" ? discardPileRef.current : playerTarget;
+
+    const center = (element: Element | null | undefined): { x: number; y: number } => {
+      if (!table || !element) return { x: 0, y: 0 };
+      const tableRect = table.getBoundingClientRect();
+      const rect = element.getBoundingClientRect();
+      return {
+        x: rect.left - tableRect.left + rect.width / 2,
+        y: rect.top - tableRect.top + rect.height / 2,
+      };
+    };
+
+    return { key: Date.now(), type, player, cardId, from: center(source), to: center(destination) };
+  }, []);
+
   useEffect(() => {
     if (!tableMotion) return;
     const timer = window.setTimeout(() => setTableMotion(null), 1_150);
     return () => window.clearTimeout(timer);
   }, [tableMotion]);
+
+  useEffect(() => {
+    if (!recentDrawId) return;
+    const timer = window.setTimeout(() => setRecentDrawId(null), 2_400);
+    return () => window.clearTimeout(timer);
+  }, [recentDrawId]);
 
   useEffect(() => {
     if (!activeDragId) return;
@@ -316,7 +387,7 @@ function App() {
       ? gameState.discard[gameState.discard.length - 1]
       : action.type === "DISCARD" ? action.cardId[0] : undefined;
     const motionTimer = window.setTimeout(() => {
-      if (animated) setTableMotion({ key: Date.now(), type: action.type as TableMotion["type"], player: action.player, cardId });
+      if (animated) setTableMotion(createTableMotion(action.type as TableMotion["type"], action.player, cardId));
     }, 360);
     const actionTimer = window.setTimeout(() => {
       const next = cloneState(gameState);
@@ -328,7 +399,7 @@ function App() {
       window.clearTimeout(motionTimer);
       window.clearTimeout(actionTimer);
     };
-  }, [activeDragId, gameState]);
+  }, [activeDragId, createTableMotion, gameState]);
 
   function clearSelections(): void {
     setSelectedIds(new Set());
@@ -345,10 +416,24 @@ function App() {
       return false;
     }
     if (action.type === "DRAW_DECK" || action.type === "DRAW_DISCARD" || action.type === "DISCARD") {
-      const cardId = action.type === "DRAW_DISCARD"
-        ? gameState.discard[gameState.discard.length - 1]
-        : action.type === "DISCARD" ? action.cardId[0] : undefined;
-      setTableMotion({ key: Date.now(), type: action.type, player: action.player, cardId });
+      const cardId = action.type === "DRAW_DECK" || action.type === "DRAW_DISCARD"
+        ? next.lastDrawnCardId
+        : action.cardId[0];
+      window.requestAnimationFrame(() => {
+        if (action.player === HUMAN_ID && action.type !== "DISCARD" && cardId) {
+          const cardNode = handCardRefs.current.get(cardId);
+          const handNode = handCardsRef.current;
+          if (cardNode && handNode) {
+            handNode.scrollLeft = Math.max(0, cardNode.offsetLeft - (handNode.clientWidth - cardNode.offsetWidth) / 2);
+          }
+          window.requestAnimationFrame(() => {
+            setTableMotion(createTableMotion(action.type, action.player, cardId));
+          });
+          return;
+        }
+        setTableMotion(createTableMotion(action.type, action.player, cardId ?? undefined));
+      });
+      if (action.type === "DRAW_DECK" || action.type === "DRAW_DISCARD") setRecentDrawId(cardId ?? null);
     }
     if (action.type === "DRAW_DECK" || action.type === "DRAW_DISCARD") {
       setTurnBaseline(cloneState(next));
@@ -418,8 +503,10 @@ function App() {
         return;
       }
     }
-    setTableMotion({ key: Date.now(), type: "DISCARD", player: HUMAN_ID, cardId });
     setGameState(next);
+    window.requestAnimationFrame(() => {
+      setTableMotion(createTableMotion("DISCARD", HUMAN_ID, cardId));
+    });
     setTurnBaseline(null);
     setDraftGroups([]);
     setError("");
@@ -427,12 +514,19 @@ function App() {
   }
 
   function handleDragStart(event: DragStartEvent): void {
-    setActiveDragId(String(event.active.id));
+    const id = String(event.active.id);
+    setActiveDragId(id);
+    setDragOverId(id);
+  }
+
+  function handleDragOver(event: DragOverEvent): void {
+    setDragOverId(event.over ? String(event.over.id) : null);
   }
 
   function handleDragEnd(event: DragEndEvent): void {
     if (!event.over) {
       setActiveDragId(null);
+      setDragOverId(null);
       return;
     }
     handleCardDrop(String(event.active.id), String(event.over.id));
@@ -440,6 +534,7 @@ function App() {
 
   function handleCardDrop(activeId: CardID, overId: string): void {
     setActiveDragId(null);
+    setDragOverId(null);
     const draggedIds = selectedIds.has(activeId) ? selection : [activeId];
     if (overId === "table-meld-drop") {
       playCards(draggedIds);
@@ -492,6 +587,7 @@ function App() {
     setGameState(next);
     setManualOrder(next.playersPrivate[HUMAN_ID].hand);
     setSortMode("rank");
+    setRecentDrawId(null);
     setTurnBaseline(null);
     setDraftGroups([]);
     clearSelections();
@@ -514,6 +610,7 @@ function App() {
   const mustOpenFromTrash = !humanOpened && gameState.lastDrawSource === "DISCARD";
   const openingReady = draftGroups.length > 0 && draftPoints >= 51;
   const canFinishTurn = Boolean(selectedDiscard && !sameTrashCard && (!mustOpenFromTrash || openingReady));
+  const activeHandIndex = activeDragId ? orderedHand.indexOf(activeDragId) : -1;
   const hasTurnChanges = Boolean(turnBaseline && (
     draftGroups.length > 0
     || gameState.phase !== turnBaseline.phase
@@ -522,7 +619,13 @@ function App() {
   ));
 
   return (
-    <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd} onDragCancel={() => setActiveDragId(null)}>
+    <DndContext
+      sensors={sensors}
+      onDragStart={handleDragStart}
+      onDragOver={handleDragOver}
+      onDragEnd={handleDragEnd}
+      onDragCancel={() => { setActiveDragId(null); setDragOverId(null); }}
+    >
     <main className="app-shell">
       <header className="topbar">
         <div>
@@ -568,10 +671,17 @@ function App() {
       )}
 
       <div className="game-layout">
-      <div className={`table-shell ${isHumanTurn ? "your-turn" : "waiting-turn"} ${activeDragId ? "dragging-card" : ""}`}>
+      <div ref={tableShellRef} className={`table-shell ${isHumanTurn ? "your-turn" : "waiting-turn"} ${activeDragId ? "dragging-card" : ""}`}>
       <section className="opponents" aria-label="Opponents">
         {Array.from({ length: gameState.numPlayers }, (_, player) => player).filter((player) => player !== HUMAN_ID).map((player) => (
-          <div key={player} className={`player-chip ${gameState.currentTurn === player ? "current" : ""}`}>
+          <div
+            key={player}
+            ref={(node) => {
+              if (node) playerSeatRefs.current.set(player, node);
+              else playerSeatRefs.current.delete(player);
+            }}
+            className={`player-chip ${gameState.currentTurn === player ? "current" : ""} ${tableMotion?.player === player ? "motion-pulse" : ""}`}
+          >
             <div className="player-avatar">P{player + 1}</div>
             <div className="player-copy">
               <span>Player {player + 1}</span>
@@ -584,8 +694,18 @@ function App() {
       </section>
 
       {tableMotion && (
-        <div key={tableMotion.key} className={`table-motion motion-${tableMotion.type.toLowerCase()} ${tableMotion.player === HUMAN_ID ? "motion-human" : "motion-bot"} motion-seat-${tableMotion.player}`} aria-live="polite">
-          <CardView card={tableMotion.type === "DRAW_DECK" || !tableMotion.cardId ? undefined : gameState.cardsById[tableMotion.cardId]} small />
+        <div
+          key={tableMotion.key}
+          className={`table-motion motion-${tableMotion.type.toLowerCase()} ${tableMotion.player === HUMAN_ID ? "motion-human" : "motion-bot"}`}
+          style={{
+            "--motion-from-x": `${tableMotion.from.x}px`,
+            "--motion-from-y": `${tableMotion.from.y}px`,
+            "--motion-to-x": `${tableMotion.to.x}px`,
+            "--motion-to-y": `${tableMotion.to.y}px`,
+          } as CSSProperties}
+          aria-live="polite"
+        >
+          <CardView card={(tableMotion.player !== HUMAN_ID && tableMotion.type === "DRAW_DECK") || !tableMotion.cardId ? undefined : gameState.cardsById[tableMotion.cardId]} small />
           <span>{tableMotion.player === HUMAN_ID ? "You" : `Player ${tableMotion.player + 1}`} {tableMotion.type === "DISCARD" ? "discarded" : "drew"}</span>
         </div>
       )}
@@ -593,8 +713,9 @@ function App() {
       <section className="table-area">
         <div className="piles">
           <button
+            ref={drawPileRef}
             type="button"
-            className="pile-button"
+            className={`pile-button ${tableMotion?.type === "DRAW_DECK" ? "motion-pulse" : ""}`}
             disabled={!isHumanTurn || gameState.phase !== "DRAW" || gameState.deckCount === 0 && gameState.discard.length <= 1}
             onClick={() => runAction({ type: "DRAW_DECK", player: HUMAN_ID })}
           >
@@ -602,8 +723,9 @@ function App() {
           </button>
           <DropZone id="discard-drop" className="discard-drop-zone" onNativeDrop={() => activeDragId && handleCardDrop(activeDragId, "discard-drop")}>
           <button
+            ref={discardPileRef}
             type="button"
-            className="pile-button"
+            className={`pile-button ${tableMotion?.type === "DRAW_DISCARD" || tableMotion?.type === "DISCARD" ? "motion-pulse" : ""}`}
             disabled={!isHumanTurn || gameState.phase !== "DRAW" || !canDrawTrash}
             onClick={() => runAction({ type: "DRAW_DISCARD", player: HUMAN_ID })}
             title={!humanOpened && topDiscardId && !canDrawTrash ? "This card does not enable a legal 51-point opening." : undefined}
@@ -732,7 +854,7 @@ function App() {
         )}
       </section>
 
-      <section className="hand-panel">
+      <section ref={handPanelRef} className={`hand-panel ${tableMotion?.player === HUMAN_ID ? "motion-pulse" : ""}`}>
         <div className="section-heading">
           <div className="you-heading"><span className="player-avatar you-avatar">YOU</span><div><p className="eyebrow">Your seat · {humanOpened ? "Opened" : "Closed"}</p><h2>Your hand · {humanHand.length}</h2></div></div>
           <div className="sort-controls">
@@ -742,19 +864,28 @@ function App() {
         </div>
         <p className="drag-hint">Drag to reorder · Select several cards, then drag them to the table · Drag one to the discard pile to end your turn</p>
         <SortableContext items={orderedHand} strategy={horizontalListSortingStrategy}>
-        <div className="hand-cards">
-          {orderedHand.map((id) => (
+        <div ref={handCardsRef} className={`hand-cards ${activeDragId ? "live-reordering" : ""}`}>
+          {orderedHand.map((id, index) => (
             <SortableHandCard
               key={id}
               id={id}
+              index={index}
+              activeIndex={activeHandIndex}
+              dragOverIndex={dragOverId ? orderedHand.indexOf(dragOverId) : -1}
+              recentDraw={recentDrawId === id}
               card={gameState.cardsById[id]}
               selected={selectedIds.has(id)}
               disabled={stagedIds.has(id)}
               onClick={() => toggleCard(id)}
               badge={stagedIds.has(id) ? "Staged" : undefined}
-              onNativeDragStart={setActiveDragId}
+              onNativeDragStart={(dragId) => { setActiveDragId(dragId); setDragOverId(dragId); }}
+              onNativeDragOver={setDragOverId}
               onNativeDrop={(targetId) => activeDragId && handleCardDrop(activeDragId, targetId)}
-              onNativeDragEnd={() => setActiveDragId(null)}
+              onNativeDragEnd={() => { setActiveDragId(null); setDragOverId(null); }}
+              onNodeRef={(node) => {
+                if (node) handCardRefs.current.set(id, node);
+                else handCardRefs.current.delete(id);
+              }}
             />
           ))}
         </div>
