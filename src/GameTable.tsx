@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type DragEvent as ReactDragEvent, type ReactNode } from "react";
-import { DndContext, DragOverlay, TouchSensor, useDroppable, useSensor, useSensors, type DragEndEvent, type DragOverEvent, type DragStartEvent } from "@dnd-kit/core";
+import { DndContext, DragOverlay, MouseSensor, TouchSensor, useDroppable, useSensor, useSensors, type DragEndEvent, type DragOverEvent, type DragStartEvent } from "@dnd-kit/core";
 import { SortableContext, arrayMove, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Rank } from "./engine/card";
@@ -84,7 +84,10 @@ export function GameTable({ game, players, modeLabel, turnDeadlineAt = null, onA
   const handCardRefs = useRef(new Map<CardID, HTMLDivElement>());
   const playerSeatRefs = useRef(new Map<number, HTMLDivElement>());
   const seenEvents = useRef(new Set(game.events.map((event) => event.id)));
-  const sensors = useSensors(useSensor(TouchSensor, { activationConstraint: { delay: 160, tolerance: 8 } }));
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 10 } }),
+  );
 
   const selection = useMemo(() => [...selectedIds], [selectedIds]);
   const stagedIds = useMemo(() => new Set(draftGroups.flatMap((group) => group.cardIds)), [draftGroups]);
@@ -375,9 +378,9 @@ export function GameTable({ game, players, modeLabel, turnDeadlineAt = null, onA
             <div className={`hand-command-bar ${timerUrgent ? "urgent" : ""}`}>
               <div className="hand-identity"><span className="player-avatar you-avatar">YOU</span><div><h2>{game.ownHand.length} cards</h2><p>{opened ? "Opened" : "Closed"}{viewerScoreLabel ? ` · ${viewerScoreLabel}` : ""}</p>{viewerStatusNote?.startsWith("Timeout") && <small>{viewerStatusNote}</small>}</div></div>
               <div className="turn-command">
-                <div className="turn-command-heading"><div><p className="eyebrow">{game.phase === "GAME_OVER" ? "Game over" : isMyTurn ? "Your turn" : `${turnName}'s turn`}<span className="turn-number">Turn {game.turnNumber}</span>{!opened && draftGroups.length > 0 && <span className="opening-count">Opening · {draftPoints} pts</span>}</p><h3>{game.phase === "DRAW" ? "Draw a card" : game.phase === "GAME_OVER" ? `${winnerName} wins` : isMyTurn ? "Play cards, then discard" : `${turnName} is playing…`}</h3></div></div>
+                <div className="turn-command-heading"><div><p className="eyebrow">{game.phase === "GAME_OVER" ? "Game over" : isMyTurn ? "Your turn" : `${turnName}'s turn`}<span className="turn-number">Turn {game.turnNumber}</span>{!opened && <span className="opening-count">Opening {draftPoints}/51</span>}</p><h3>{game.phase === "DRAW" ? "Draw a card" : game.phase === "GAME_OVER" ? `${winnerName} wins` : isMyTurn ? "Play cards, then discard" : `${turnName} is playing…`}</h3></div></div>
                 {isMyTurn && game.phase === "DRAW" && <p className="instruction"><strong>Start by drawing</strong> from either pile above.</p>}
-                {isMyTurn && game.phase !== "DRAW" && game.phase !== "GAME_OVER" && <div className="action-stack"><p className="instruction">{opened ? selectedMeldId ? selectedJokerId ? "Select its natural replacement from your hand." : "Add selected cards to this meld." : "Select cards to create a meld, or select a table meld to extend." : `Stage opening melds worth at least 51 points. Current total: ${draftPoints}.`}</p><div className="button-row"><button type="button" disabled={busy || selection.length === 0 || (!selectedMeldId && !candidate)} onClick={playSelection}>{opened ? selectedMeldId ? "Add to meld" : "Play meld" : "Move selection to table"}</button>{canSwapJoker && <button type="button" disabled={busy} onClick={swapJoker}>Replace Joker</button>}<button type="button" disabled={busy} onClick={undoTurn}>Undo table moves</button><button type="button" className="gold-button" disabled={busy || !selectedDiscard} onClick={() => finishTurn()}>Discard & end turn</button></div></div>}
+                {isMyTurn && game.phase !== "DRAW" && game.phase !== "GAME_OVER" && <div className="action-stack"><p className="instruction">{opened ? selectedMeldId ? selectedJokerId ? "Pick the replacement card from your hand." : "Add selected cards to this meld." : "Select cards to meld, or tap a table meld to extend." : "Stage melds worth 51+ to open."}</p><div className="button-row"><button type="button" disabled={busy || selection.length === 0 || (!selectedMeldId && !candidate)} onClick={playSelection}>{opened ? selectedMeldId ? "Add to meld" : "Play meld" : "Stage meld"}</button>{canSwapJoker && <button type="button" disabled={busy} onClick={swapJoker}>Replace Joker</button>}<button type="button" disabled={busy} onClick={undoTurn}>Undo</button><button type="button" className="gold-button" disabled={busy || !selectedDiscard} onClick={() => finishTurn()}>Discard & end turn</button></div></div>}
                 {!isMyTurn && game.phase !== "GAME_OVER" && <p className="instruction waiting-copy">Watch the table for their plays.</p>}
               </div>
               <div className="hand-tools">{isMyTurn && turnDeadlineAt !== null && game.phase !== "GAME_OVER" && <strong className="timer-count" style={{ "--turn-progress": turnProgress } as CSSProperties} aria-label={`${remainingTurnSeconds} seconds left`}>{remainingTurnSeconds}<small>s</small></strong>}<div className="sort-controls" aria-label="Sort hand"><button type="button" aria-pressed={sortMode === "rank"} onClick={() => setSortMode("rank")}>Rank</button><button type="button" aria-pressed={sortMode === "suit"} onClick={() => setSortMode("suit")}>Suit</button></div></div>

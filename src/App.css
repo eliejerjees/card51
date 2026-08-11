@@ -383,7 +383,10 @@ h2 { margin-bottom: 0; font-size: 1rem; }
 .playing-card.small { width: 46px; }
 .playing-card img { display: block; width: 100%; height: 100%; border-radius: inherit; object-fit: fill; }
 .card-button { overflow: visible; border: 2px solid transparent; transition: transform .14s ease, border-color .14s ease, filter .14s ease; }
-.card-button:hover:not(:disabled) { z-index: 20; transform: translateY(-12px) scale(1.035); background: white; filter: brightness(1.06); }
+/* Touch devices latch :hover after a tap, leaving cards stuck in the lifted state. */
+@media (hover: hover) {
+  .card-button:hover:not(:disabled) { z-index: 20; transform: translateY(-12px) scale(1.035); background: white; filter: brightness(1.06); }
+}
 .card-button.selected { z-index: 21; transform: translateY(-16px); border-color: var(--gold); box-shadow: 0 0 0 3px rgba(242,197,87,.32), 0 8px 18px rgba(0,0,0,.4); }
 .card-badge { position: absolute; left: 50%; bottom: -7px; transform: translateX(-50%); z-index: 22; padding: .07rem .28rem; border-radius: 999px; color: #201800; background: var(--gold); font-size: .54rem; font-weight: 900; white-space: nowrap; }
 
@@ -403,16 +406,15 @@ h2 { margin-bottom: 0; font-size: 1rem; }
 
 .hand-panel { position: relative; z-index: 3; min-width: 0; padding: 0 .5rem; }
 .hand-panel .playing-card { width: 86px; }
-.hand-command-bar { position: relative; display: grid; grid-template-columns: minmax(160px,1fr) minmax(300px,1.35fr) minmax(160px,1fr); align-items: center; gap: 1rem; padding: .4rem .65rem .52rem; border-top: 1px solid rgba(255,226,148,.3); border-bottom: 1px solid rgba(255,255,255,.08); background: radial-gradient(circle at 50% 0,rgba(242,197,87,.09),transparent 42%),linear-gradient(90deg,rgba(2,29,22,.74),rgba(2,29,22,.3),rgba(2,29,22,.74)); }
+/* Side columns flex, centre column is content-sized — otherwise the turn controls get
+   stretched across the full width and the buttons end up marooned in empty space. */
+.hand-command-bar { position: relative; display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); align-items: center; gap: .9rem; padding: .45rem .65rem .58rem; border-top: 1px solid rgba(255,255,255,.08); border-bottom: 1px solid rgba(255,255,255,.08); background: radial-gradient(circle at 50% 0,rgba(242,197,87,.09),transparent 42%),linear-gradient(90deg,rgba(2,29,22,.74),rgba(2,29,22,.3),rgba(2,29,22,.74)); }
 .hand-identity { display: flex; align-items: center; gap: .5rem; min-width: 0; }
 .hand-identity h2 { margin: 0; font-size: .92rem; line-height: 1; }
 .hand-identity p { margin: .14rem 0 0; color: var(--muted); font-size: .61rem; font-weight: 750; }
 .hand-identity small { display: block; margin-top: .12rem; color: #ff9b88; font-size: .58rem; font-weight: 850; }
 .you-avatar { width: 34px; height: 34px; font-size: .55rem; }
-.turn-command { position: relative; min-width: 0; text-align: center; }
-.turn-command::before, .turn-command::after { content: ""; position: absolute; top: 50%; width: clamp(18px,3vw,48px); height: 1px; background: linear-gradient(90deg,transparent,rgba(242,197,87,.42)); }
-.turn-command::before { right: calc(100% + .15rem); }
-.turn-command::after { left: calc(100% + .15rem); transform: rotate(180deg); }
+.turn-command { position: relative; min-width: 0; max-width: min(660px,100%); margin-inline: auto; text-align: center; }
 .turn-command-heading { display: flex; align-items: center; justify-content: center; }
 .turn-command-heading .eyebrow { display: flex; align-items: center; justify-content: center; gap: .4rem; margin-bottom: .08rem; color: var(--gold-bright); font-size: .56rem; }
 .turn-command-heading h3 { margin: 0; font: 800 1.05rem/1.05 Georgia,serif; letter-spacing: .01em; }
@@ -420,8 +422,10 @@ h2 { margin-bottom: 0; font-size: 1rem; }
 .turn-command > .instruction { margin-top: .14rem; font-size: .67rem; line-height: 1.2; }
 .turn-command .action-stack { gap: .25rem; }
 .turn-command .action-stack .instruction { font-size: .68rem; line-height: 1.25; }
-.turn-command .button-row { margin-top: 0; }
-.turn-command .button-row button { padding: .32rem .48rem; font-size: .64rem; }
+.turn-command .button-row { margin-top: .28rem; justify-content: center; gap: .4rem; }
+.turn-command .button-row button { min-height: 36px; padding: .42rem .8rem; font-size: .72rem; }
+/* The turn-ending action is the one players reach for most — let it read as primary. */
+.turn-command .button-row .gold-button { padding-inline: 1rem; font-weight: 800; }
 .timer-count { position: relative; isolation: isolate; display: grid; grid-auto-flow: column; place-content: center; align-items: baseline; width: 42px; height: 42px; border-radius: 50%; color: var(--gold-bright); background: conic-gradient(var(--gold) calc(var(--turn-progress) * 1turn),rgba(255,255,255,.1) 0); font-size: .78rem; font-variant-numeric: tabular-nums; line-height: 1; box-shadow: 0 4px 12px rgba(0,0,0,.25); }
 .timer-count::before { content: ""; position: absolute; z-index: -1; inset: 3px; border-radius: inherit; background: #073426; }
 .timer-count small { margin-left: 1px; font-size: .48rem; }
@@ -434,9 +438,12 @@ h2 { margin-bottom: 0; font-size: 1rem; }
 .hand-command-bar.urgent .timer-count { color: #fff; background: conic-gradient(#f06a52 calc(var(--turn-progress) * 1turn),rgba(255,255,255,.1) 0); }
 .hand-command-bar.urgent .compact-turn-timer i { background: linear-gradient(90deg,#d83728,#ff9b74); }
 .drag-hint { margin: .22rem 0 -.45rem; color: rgba(225,236,230,.72); text-align: center; font-size: .63rem; line-height: 1.25; letter-spacing: .01em; }
-.hand-cards { min-width: 0; display: flex; flex-wrap: nowrap; justify-content: center; align-items: flex-end; overflow-x: auto; overflow-y: hidden; padding: .72rem 2rem .25rem; scrollbar-width: thin; scrollbar-color: rgba(242,197,87,.55) transparent; }
-.hand-card-slot { position: relative; flex: 0 0 auto; touch-action: pan-x; }
-.hand-card-slot .card-button { cursor: grab; touch-action: none; }
+/* padding-top must clear the -16px selected lift, or the card is clipped by overflow. */
+.hand-cards { min-width: 0; display: flex; flex-wrap: nowrap; justify-content: center; align-items: flex-end; overflow-x: auto; overflow-y: hidden; padding: 1.4rem 2rem .25rem; scrollbar-width: thin; scrollbar-color: rgba(242,197,87,.55) transparent; }
+.hand-card-slot { position: relative; flex: 0 0 auto; touch-action: manipulation; }
+/* dnd-kit's delay-based TouchSensor disambiguates drag from scroll on its own, so cards
+   must NOT declare touch-action: none — that swallows every touch gesture on the hand. */
+.hand-card-slot .card-button { cursor: grab; touch-action: manipulation; -webkit-touch-callout: none; user-select: none; }
 .hand-card-slot .card-button:active { cursor: grabbing; }
 .hand-card-slot + .hand-card-slot { margin-left: -31px; }
 .hand-card-slot:nth-child(2n) { transform: translateY(2px); }
@@ -522,6 +529,27 @@ h2 { margin-bottom: 0; font-size: 1rem; }
   .game-table-app { height: 100dvh; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
   .game-table-app .game-layout { flex: 1; min-height: 0; }
   .game-table-app .table-shell { height: 100%; min-height: 0; }
+  /* There is plenty of width here — lay the turn status, instruction and actions out
+     along the bar instead of stacking them in a narrow centred column. */
+  /* Centre column takes all leftover space so its edges never depend on content:
+     the heading stays pinned left and the buttons pinned right, so nothing slides
+     sideways when the action buttons appear or change between phases. */
+  .hand-command-bar { grid-template-columns: auto minmax(0,1fr) auto; }
+  /* margin-inline:auto would shrink-wrap this grid item and re-centre it on every
+     content change — it must stretch to fill the column instead. */
+  .turn-command { max-width: none; margin-inline: 0; width: 100%; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: .6rem 1.5rem; text-align: left; }
+  .turn-command .action-stack { flex: 1 1 auto; display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1.1rem; }
+  .turn-command .action-stack .button-row { margin-left: auto; }
+  .turn-command .action-stack .instruction { margin: 0; text-align: left; }
+  /* The status pills and the phase heading are two stacked lines for no reason —
+     run them along one line, each separated like the pills already are. */
+  .turn-command-heading > div { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: .25rem .8rem; }
+  .turn-command-heading .eyebrow { margin-bottom: 0; gap: .75rem; }
+  .turn-command-heading h3 { padding-left: .8rem; border-left: 1px solid rgba(255,255,255,.16); }
+  .turn-number, .opening-count { padding-left: .75rem; }
+  .turn-command .button-row { flex-wrap: nowrap; margin: 0; }
+  .turn-command .button-row button { min-height: 40px; padding: .5rem .95rem; font-size: .74rem; }
+  .hand-command-bar { gap: 1.5rem; padding-inline: 1.1rem; }
 }
 
 @media (max-width: 900px) {
@@ -575,15 +603,34 @@ h2 { margin-bottom: 0; font-size: 1rem; }
   .new-game-controls { justify-content: flex-end; }
   .session-mode { width: 100%; text-align: right; background: transparent; padding: 0; }
   h1 { font-size: 2rem; }
+  /* In-game the header is pure chrome — keep it to a single compact row so the
+     vertical budget goes to the table and the hand. */
+  .game-table-app .topbar { min-height: 0; align-items: center; gap: .5rem; padding: .3rem .5rem; }
+  .game-table-app .topbar .eyebrow { display: none; }
+  .game-table-app .topbar h1 { font-size: 1.35rem; }
+  .game-table-app .new-game-controls { flex-wrap: nowrap; align-items: center; gap: .3rem; }
+  .game-table-app .new-game-controls button { padding: .38rem .5rem; font-size: .68rem; }
+  .game-table-app .session-mode { width: auto; padding: .24rem .5rem; font-size: .56rem; }
   .status-strip { gap: .45rem; }
   .status-strip span { padding-left: .45rem; }
   .game-layout { gap: 0; }
-  .table-shell { min-height: calc(100dvh - 76px); grid-template-rows: auto auto auto; padding: .5rem .4rem 1.1rem; border-width: 6px; border-radius: 22px; }
-  .opponents { justify-content: flex-start; overflow-x: auto; padding: 0; }
-  .player-chip { min-width: 145px; grid-template-columns: 34px 1fr; }
+  /* Pin the game to the viewport so the hand is always on screen; the table area
+     scrolls internally instead of the whole page scrolling the hand out of reach. */
+  .game-table-app { height: 100dvh; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .game-table-app .game-layout { flex: 1; min-height: 0; grid-template-rows: minmax(0,1fr) auto; }
+  .game-table-app .table-shell { height: 100%; }
+  .table-shell { min-height: 0; grid-template-rows: auto minmax(0,1fr) auto; padding: .5rem .4rem .55rem; border-width: 6px; border-radius: 22px; }
+  /* Three opponents have to share the width — fixed-width chips overflowed and hid the
+     4th player entirely. Drop the avatar (pure decoration) and let chips share evenly. */
+  .opponents { justify-content: space-between; gap: .3rem; padding: 0 .15rem; overflow: visible; }
+  .player-chip { flex: 1 1 0; min-width: 0; grid-template-columns: minmax(0,1fr); gap: .2rem; padding: .4rem .45rem; border-radius: 13px; }
+  .player-chip .player-avatar { display: none; }
+  .player-copy > span { font-size: .67rem; }
+  .player-copy strong { font-size: .61rem; }
+  .player-copy small { font-size: .55rem; }
   .player-avatar { width: 34px; height: 34px; }
   .seat-card-stack { display: none; }
-  .table-area { grid-template-columns: 1fr; min-height: 0; gap: .45rem; }
+  .table-area { grid-template-columns: 1fr; min-height: 0; gap: .45rem; overflow-y: auto; overscroll-behavior: contain; }
   .piles { min-height: 132px; gap: .7rem; }
   .pile-button { min-width: 92px; min-height: 128px; padding: .3rem; }
   .piles .playing-card { width: 62px; }
@@ -592,28 +639,64 @@ h2 { margin-bottom: 0; font-size: 1rem; }
   .meld-board > .empty-message { margin-top: 1.25rem; font-size: .72rem; }
   .hand-command-bar { grid-template-columns: minmax(0,1fr) auto; gap: .4rem .65rem; padding: .45rem .5rem .52rem; }
   .turn-command { grid-column: 1 / -1; grid-row: 1; padding-bottom: .38rem; border-bottom: 1px solid rgba(255,255,255,.09); }
-  .turn-command::before, .turn-command::after { display: none; }
   .turn-command-heading { align-items: center; }
   .hand-identity { grid-column: 1; grid-row: 2; }
   .hand-tools { grid-column: 2; grid-row: 2; justify-content: flex-end; }
   .timer-count { width: 38px; height: 38px; }
-  .turn-command .button-row { gap: .3rem; }
-  .turn-command .button-row > button { flex: 1 1 105px; }
+  /* Labels are short enough to share one row, keeping the whole bar to two lines. */
+  .turn-command .button-row { display: flex; flex-wrap: wrap; gap: .3rem; }
+  .turn-command .button-row > button { flex: 1 1 auto; min-height: 40px; padding: .35rem .4rem; font-size: .69rem; }
+  .turn-command .button-row > .gold-button { flex: 1.5 1 auto; }
+  /* Strip the bar to what a player actually needs mid-turn: state, actions, sorting.
+     The avatar, card count, turn number, restated heading and tutorial hint all go. */
+  .game-table-app .drag-hint { display: none; }
+  .turn-command-heading h3, .turn-command-heading .turn-number { display: none; }
+  .hand-identity .you-avatar { display: none; }
+  .hand-identity > div { display: flex; align-items: baseline; gap: .3rem; }
+  .hand-identity h2 { font-size: .72rem; }
+  .hand-identity p { margin: 0; font-size: .58rem; }
+  .turn-command { padding-bottom: .28rem; }
+  .turn-command .action-stack .instruction { margin: 0 0 .1rem; font-size: .6rem; }
+  .hand-command-bar { padding: .3rem .5rem .4rem; gap: .28rem .5rem; }
+  /* A lifted selection collides with the row above once the hand wraps — ring it instead. */
+  .hand-cards .card-button.selected { transform: none; border-color: var(--gold-bright); box-shadow: 0 0 0 3px rgba(242,197,87,.6), 0 0 14px rgba(255,218,111,.45); }
   .button-row > button { flex: 1 1 125px; }
   .interpretation-picker { display: grid; }
   .hand-panel { padding-inline: .2rem; }
-  .hand-cards { justify-content: flex-start; padding: .72rem 1rem .35rem; scroll-snap-type: x proximity; }
-  .hand-card-slot { scroll-snap-align: center; }
+  /* Wrap the hand onto as many rows as it takes so every card is reachable
+     without horizontal scrolling — scrolling a card strip fights the drag gesture. */
+  /* max-height is a safety valve: if the hand still can't fit (many cards on a short
+     screen) it scrolls vertically rather than being clipped by the shell's overflow. */
+  .hand-cards { flex-wrap: wrap; justify-content: center; align-items: flex-start; overflow: hidden auto; overscroll-behavior: contain; max-height: 38vh; row-gap: .3rem; padding: .45rem .5rem .3rem calc(.5rem + 30px); scroll-snap-type: none; }
+  /* Every slot (not just siblings) carries the overlap so wrapped rows stay aligned;
+     the container's extra left padding cancels it out for the first card in each row. */
+  .hand-card-slot, .hand-card-slot + .hand-card-slot { margin-left: -30px; scroll-snap-align: none; }
+  .hand-card-slot:nth-child(2n) { transform: none; }
   .playing-card { width: 62px; }
-  .hand-panel .playing-card { width: 72px; }
+  .hand-panel .playing-card { width: 66px; }
   .playing-card.small { width: 43px; }
-  .hand-card-slot + .hand-card-slot { margin-left: -18px; }
-  .drag-hint { margin: .25rem .5rem -.25rem; white-space: normal; font-size: .65rem; }
-  .lower-grid { position: static; display: grid; grid-template-columns: 1fr 1fr; padding: .45rem; }
+  .drag-hint { margin: .2rem .5rem -.2rem; white-space: normal; font-size: .63rem; }
+  .lower-grid { position: static; display: grid; grid-template-columns: 1fr 1fr; padding: .3rem .45rem; max-height: 38vh; overflow-y: auto; }
+  .sort-controls button { min-height: 34px; padding: .3rem .7rem; }
   .history-panel, .rules-panel { min-width: 0; }
   .history-panel[open], .rules-panel[open] { width: 100%; grid-column: 1 / -1; }
   .meld-card { min-width: 205px; }
   .meld-card .playing-card.small { width: 52px; }
+}
+
+/* Short phones (SE-class, or any handset in landscape-ish height): shrink the hand so
+   it still fits on screen without scrolling. */
+@media (max-width: 700px) and (max-height: 700px) {
+  .hand-panel .playing-card { width: 56px; }
+  .hand-card-slot, .hand-card-slot + .hand-card-slot { margin-left: -26px; }
+  .hand-cards { padding-left: calc(.5rem + 26px); max-height: 42vh; }
+  .hand-command-bar { padding: .35rem .45rem .4rem; }
+  .drag-hint { display: none; }
+  /* History/rules are reference material — not worth screen height mid-game here. */
+  .game-table-app .lower-grid { display: none; }
+  .piles { min-height: 108px; }
+  .pile-button { min-height: 104px; }
+  .meld-board { min-height: 120px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
