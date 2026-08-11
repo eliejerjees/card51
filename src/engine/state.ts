@@ -1,385 +1,377 @@
-import { makeShuffledDeck } from "./deckFactory";
+import type { Action, MeldInput, MeldProposal } from "./actions";
+import { makeShuffledDeck, shuffleInPlace } from "./deckFactory";
 import { GroupValidator } from "./groupValidator";
-import type { Action } from "./actions";
-import type { CardDTO, CardID, GameState, PlayerID } from "./types";
-import { Card } from "./card";
+import { validateStateInvariants } from "./invariants";
+import { canTakeDiscardForOpening } from "./opening";
+import type { CardID, GameEventType, GameState, Meld, PlayerID } from "./types";
 
-function toCardClass(dto: CardDTO): Card {
-  return new Card(dto.suit, dto.rank);
-}
+export type ActionResult = { ok: true } | { ok: false; error: string };
 
-function dtoByIds(state: GameState, ids: CardID[]): CardDTO[] {
-  return ids.map((id) => state.cardsById[id]);
-}
+const success = (): ActionResult => ({ ok: true });
+const failure = (error: string): ActionResult => ({ ok: false, error });
 
-function groupPoints(ids: CardID[], cardsById: Record<CardID, CardDTO>): number {
-  return ids.reduce((s, id) => s + toCardClass(cardsById[id]).getValue(), 0);
+function addEvent(
+  state: GameState,
+  type: GameEventType,
+  message: string,
+  details: Partial<Pick<Meld, "id">> & { player?: PlayerID; cardId?: CardID } = {},
+): void {
+  state.events.push({
+    id: `event-${state.events.length + 1}`,
+    type,
+    message,
+    player: details.player,
+    cardId: details.cardId,
+    meldId: details.id,
+  });
 }
 
 function ensurePlayer(state: GameState, player: PlayerID): string | null {
-  if (player !== state.currentTurn) return "Not your turn.";
-  if (state.phase === "GAME_OVER") return "Game is over.";
+  if (state.phase === "GAME_OVER") return "The game is over.";
+  if (!Number.isInteger(player) || !state.playersPrivate[player]) return "Unknown player.";
+  if (player !== state.currentTurn) return "It is not your turn.";
+  return null;
+}
+
+function uniqueKnownHandCards(state: GameState, player: PlayerID, cardIds: CardID[]): string | null {
+  if (cardIds.length === 0) return "Select at least one card.";
+  if (new Set(cardIds).size !== cardIds.length) return "A physical card can only be used once.";
+  const hand = state.playersPrivate[player].hand;
+  if (cardIds.some((id) => !state.cardsById[id] || !hand.includes(id))) return "Every selected card must be in your hand.";
   return null;
 }
 
 function removeFromHand(state: GameState, player: PlayerID, cardIds: CardID[]): boolean {
-  const hand = state.playersPrivate[player].hand;
-
-  // verify all exist
-  for (const id of cardIds) {
-    if (!hand.includes(id)) return false;
-  }
-
-  // remove each
-  for (const id of cardIds) {
-    const idx = hand.indexOf(id);
-    hand.splice(idx, 1);
-  }
-
-  state.playersPublic[player].handCount = hand.length;
+  if (uniqueKnownHandCards(state, player, cardIds)) return false;
+  const removed = new Set(cardIds);
+  state.playersPrivate[player].hand = state.playersPrivate[player].hand.filter((id) => !removed.has(id));
+  state.playersPublic[player].handCount = state.playersPrivate[player].hand.length;
   return true;
 }
 
-function addBackToHand(state: GameState, player: PlayerID, cardIds: CardID[]): void {
+function addToHand(state: GameState, player: PlayerID, cardIds: CardID[]): void {
   state.playersPrivate[player].hand.push(...cardIds);
   state.playersPublic[player].handCount = state.playersPrivate[player].hand.length;
 }
 
+function newMeldId(state: GameState): string {
+  return `meld-${state.turnNumber}-${state.tableMelds.length + state.events.length + 1}`;
+}
+
+function normalizeMeldInput(input: MeldInput): MeldProposal {
+  return Array.isArray(input) ? { cardIds: input } : input;
+}
+
+function burnOrActivateMeld(state: GameState, meld: Meld, complete: boolean, player: PlayerID): void {
+  if (!complete) {
+    state.tableMelds.push(meld);
+    return;
+  }
+  state.lastBurnedMeld = structuredClone(meld);
+  state.discard.push(...meld.cardIds);
+  addEvent(state, "BURN", `Player ${player + 1} completed and burnt a ${meld.kind.toLowerCase()}.`, {
+    player,
+    id: meld.id,
+  });
+}
+
+function recycleDiscardIntoDrawPile(state: GameState): boolean {
+  if (state.drawPile.length > 0) return true;
+  if (state.discard.length <= 1) return false;
+  const topDiscard = state.discard.pop()!;
+  state.drawPile = [...state.discard];
+  state.discard = [topDiscard];
+  shuffleInPlace(state.drawPile);
+  state.deckCount = state.drawPile.length;
+  return true;
+}
+
 function nextTurn(state: GameState): void {
-  const next = ((state.currentTurn + 1) % state.numPlayers) as PlayerID;
-  state.currentTurn = next;
+  state.currentTurn = (state.currentTurn + 1) % state.numPlayers;
   state.phase = "DRAW";
   state.lastDrawnCardId = null;
   state.lastDrawSource = null;
+  state.lastBurnedMeld = null;
+  state.turnNumber += 1;
 }
 
-function newMeldId(): string {
-  return "m_" + Date.now().toString(36) + Math.random().toString(36).slice(2);
-}
+export function initGame(
+  numPlayers: number,
+  options: { random?: () => number; turnTimeLimitMs?: number | null } = {},
+): GameState {
+  if (!Number.isInteger(numPlayers) || numPlayers < 2 || numPlayers > 4) {
+    throw new Error("Card51 currently supports two to four players.");
+  }
+  const random = options.random ?? Math.random;
+  const deck = makeShuffledDeck(random);
+  const cardsById = Object.fromEntries(deck.map((card) => [card.id, card]));
+  const playersPublic: GameState["playersPublic"] = {};
+  const playersPrivate: GameState["playersPrivate"] = {};
+  for (let player = 0; player < numPlayers; player++) {
+    playersPublic[player] = { id: player, opened: false, handCount: 0 };
+    playersPrivate[player] = { hand: [] };
+  }
 
-export function initGame(numPlayers: 2 | 3 | 4): GameState {
-  const deck = makeShuffledDeck();
-  const cardsById: Record<string, CardDTO> = {};
-  for (const c of deck) cardsById[c.id] = c;
+  let dealt = 0;
+  for (let player = 0; player < numPlayers; player++) {
+    const hand = deck.slice(dealt, dealt + 14).map((card) => card.id);
+    dealt += 14;
+    playersPrivate[player].hand = hand;
+    playersPublic[player].handCount = hand.length;
+  }
+  const drawPile = deck.slice(dealt).map((card) => card.id);
 
-  const state: GameState = {
+  return {
     numPlayers,
-    currentTurn: 0,
+    currentTurn: Math.floor(random() * numPlayers),
     phase: "DRAW",
     winner: null,
-    deckCount: deck.length,
+    drawPile,
+    deckCount: drawPile.length,
     discard: [],
     lastDrawnCardId: null,
     lastDrawSource: null,
     cardsById,
-    playersPublic: {
-      0: { id: 0, opened: false, handCount: 0 },
-      1: { id: 1, opened: false, handCount: 0 },
-      2: { id: 2, opened: false, handCount: 0 },
-      3: { id: 3, opened: false, handCount: 0 },
-    },
-    playersPrivate: {
-      0: { hand: [] },
-      1: { hand: [] },
-      2: { hand: [] },
-      3: { hand: [] },
-    },
+    playersPublic,
+    playersPrivate,
     tableMelds: [],
+    events: [],
+    turnNumber: 1,
+    turnTimeLimitMs: options.turnTimeLimitMs ?? null,
+    lastBurnedMeld: null,
   };
-
-  // Deal 14 each
-  let idx = 0;
-  for (let p = 0 as PlayerID; p < numPlayers; p = (p + 1) as PlayerID) {
-    const hand = deck.slice(idx, idx + 14).map((c) => c.id);
-    idx += 14;
-    state.playersPrivate[p].hand = hand;
-    state.playersPublic[p].handCount = hand.length;
-  }
-
-  // Remaining become draw order. We pop from end as "top".
-  (state as any).__drawOrder = deck.slice(idx).map((c) => c.id);
-  state.deckCount = (state as any).__drawOrder.length;
-
-  return state;
 }
 
-export function applyAction(state: GameState, action: Action): { ok: boolean; error?: string } {
-  const err = ensurePlayer(state, action.player);
-  if (err) return { ok: false, error: err };
+function drawFromDeck(state: GameState, player: PlayerID): ActionResult {
+  if (state.phase !== "DRAW") return failure("You have already drawn this turn.");
+  if (!recycleDiscardIntoDrawPile(state)) return failure("The draw pile is empty and there are no discards to recycle.");
+  const id = state.drawPile.pop()!;
+  state.deckCount = state.drawPile.length;
+  addToHand(state, player, [id]);
+  state.lastDrawnCardId = id;
+  state.lastDrawSource = "DECK";
+  state.phase = "ACTION";
+  addEvent(state, "DRAW_DECK", `Player ${player + 1} drew from the draw pile.`, { player });
+  return success();
+}
 
-  const drawOrder: CardID[] = (state as any).__drawOrder ?? [];
+function drawFromDiscard(state: GameState, player: PlayerID): ActionResult {
+  if (state.phase !== "DRAW") return failure("You have already drawn this turn.");
+  const id = state.discard[state.discard.length - 1];
+  if (!id) return failure("The trash pile is empty.");
+  if (!state.playersPublic[player].opened) {
+    const canOpen = canTakeDiscardForOpening(state.playersPrivate[player].hand, id, state.cardsById);
+    if (!canOpen) return failure("You may only take this trash card if it enables a legal 51-point opening that uses it.");
+  }
+  state.discard.pop();
+  addToHand(state, player, [id]);
+  state.lastDrawnCardId = id;
+  state.lastDrawSource = "DISCARD";
+  state.phase = "ACTION";
+  addEvent(state, "DRAW_DISCARD", `Player ${player + 1} took the top trash card.`, { player, cardId: id });
+  return success();
+}
 
-  if (action.type === "DRAW_DECK") {
-    if (state.phase !== "DRAW") return { ok: false, error: "Not in DRAW phase." };
-    const id = drawOrder.pop();
-    if (!id) return { ok: false, error: "Deck empty." };
-
-    state.deckCount = drawOrder.length;
-    state.playersPrivate[action.player].hand.push(id);
-    state.playersPublic[action.player].handCount += 1;
-
-    state.lastDrawnCardId = id;
-    state.lastDrawSource = "DECK";
-    state.phase = "ACTION";
-    return { ok: true };
+function openWithGroups(state: GameState, player: PlayerID, groups: MeldInput[]): ActionResult {
+  if (state.phase !== "ACTION") return failure("Draw before opening.");
+  if (state.playersPublic[player].opened) return failure("You have already opened.");
+  if (groups.length === 0) return failure("Opening requires at least one meld.");
+  const proposals = groups.map(normalizeMeldInput);
+  const allIds = proposals.flatMap((group) => group.cardIds);
+  const handError = uniqueKnownHandCards(state, player, allIds);
+  if (handError) return failure(handError);
+  if (state.playersPrivate[player].hand.length - allIds.length < 1) {
+    return failure("You must keep one card for the required final discard.");
+  }
+  if (state.lastDrawSource === "DISCARD" && (!state.lastDrawnCardId || !allIds.includes(state.lastDrawnCardId))) {
+    return failure("Your opening must use the exact trash card you picked up.");
   }
 
-  if (action.type === "DRAW_DISCARD") {
-    if (state.phase !== "DRAW") return { ok: false, error: "Not in DRAW phase." };
+  const validations = proposals.map((proposal) => GroupValidator.validateMeld(
+    proposal.cardIds.map((id) => state.cardsById[id]),
+    { kind: proposal.kind, aceMode: proposal.aceMode, fixedJokerMap: proposal.jokerMap },
+  ));
+  const invalid = validations.find((validation) => !validation.ok);
+  if (invalid && !invalid.ok) return failure(invalid.error);
+  const valid = validations.filter((validation): validation is Extract<typeof validation, { ok: true }> => validation.ok);
+  const points = valid.reduce((sum, validation) => sum + validation.points, 0);
+  if (points < 51) return failure(`Opening is worth ${points}; at least 51 points are required.`);
 
-    // Your current rule: can only draw discard if already opened (you said you may change later)
-    if (!state.playersPublic[action.player].opened) {
-      return applyAction(state, { type: "DRAW_DECK", player: action.player });
-    }
-
-    const id = state.discard.pop();
-    if (!id) {
-      return applyAction(state, { type: "DRAW_DECK", player: action.player });
-    }
-
-    state.playersPrivate[action.player].hand.push(id);
-    state.playersPublic[action.player].handCount += 1;
-
-    state.lastDrawnCardId = id;
-    state.lastDrawSource = "DISCARD";
-    state.phase = "ACTION";
-    return { ok: true };
-  }
-
-  if (action.type === "OPEN_MULTI") {
-    if (state.phase !== "ACTION") return { ok: false, error: "Not in ACTION phase." };
-    if (state.playersPublic[action.player].opened) return { ok: false, error: "Already opened." };
-    if (action.groups.length < 1) return { ok: false, error: "Must open with at least one meld." };
-
-    const flat: CardID[] = action.groups.flat();
-    const unique = new Set(flat);
-    if (unique.size !== flat.length) return { ok: false, error: "Duplicate card in groups." };
-
-    // Discard-drawn rule: only require inclusion if last draw was from discard
-    if (state.lastDrawSource === "DISCARD") {
-      if (!state.lastDrawnCardId) return { ok: false, error: "No drawn card recorded." };
-      if (!unique.has(state.lastDrawnCardId)) {
-        return { ok: false, error: "Opening must include the discard-drawn card." };
-      }
-    }
-
-    const handLen = state.playersPrivate[action.player].hand.length;
-    if (handLen - flat.length < 1) return { ok: false, error: "Must keep one to discard." };
-
-    // ensure in hand
-    for (const id of flat) {
-      if (!state.playersPrivate[action.player].hand.includes(id)) {
-        return { ok: false, error: "Card not in hand." };
-      }
-    }
-
-    // total points >= 51
-    const totalPts = groupPoints(flat, state.cardsById);
-    if (totalPts < 51) return { ok: false, error: "Need 51+ points to open." };
-
-    // validate each group and collect validations (so we don't validate twice)
-    const validations = action.groups.map((g) => {
-      if (g.length < 3) return { ok: false as const, error: "Each group must have 3+ cards." };
-      return GroupValidator.validateMeld(dtoByIds(state, g));
-    });
-
-    for (const v of validations) {
-      if (!v.ok) return { ok: false, error: v.error };
-    }
-
-    // remove all cards
-    if (!removeFromHand(state, action.player, flat)) return { ok: false, error: "Card not in hand." };
-
-    // add melds using validator outputs (orderedIds + kind + aceMode + jokerMap)
-    for (let i = 0; i < action.groups.length; i++) {
-      const v = validations[i];
-      if (!v.ok) continue; // impossible due to earlier check
-
-      state.tableMelds.push({
-        id: newMeldId(),
-        owner: action.player,
-        cardIds: v.orderedIds,
-        kind: v.kind,
-        aceMode: v.aceMode,
-        jokerMap: v.jokerMap,
-      });
-    }
-
-    state.playersPublic[action.player].opened = true;
-    state.phase = "DISCARD";
-    return { ok: true };
-  }
-
-  if (action.type === "OPEN_GROUP") {
-    if (state.phase !== "ACTION") return { ok: false, error: "Not in ACTION phase." };
-    if (state.playersPublic[action.player].opened) return { ok: false, error: "Already opened." };
-
-    // Only require inclusion if drawn from discard
-    if (state.lastDrawSource === "DISCARD") {
-      if (!state.lastDrawnCardId) return { ok: false, error: "No drawn card recorded." };
-      if (!action.cardIds.includes(state.lastDrawnCardId)) {
-        return { ok: false, error: "Opening group must include the discard-drawn card." };
-      }
-    }
-
-    const pts = groupPoints(action.cardIds, state.cardsById);
-    if (pts < 51) return { ok: false, error: "Need 51+ points to open." };
-
-    const handLen = state.playersPrivate[action.player].hand.length;
-    if (handLen - action.cardIds.length < 1) return { ok: false, error: "Must keep one to discard." };
-
-    const validation = GroupValidator.validateMeld(dtoByIds(state, action.cardIds));
-    if (!validation.ok) return { ok: false, error: validation.error };
-
-    if (!removeFromHand(state, action.player, action.cardIds)) return { ok: false, error: "Card not in hand." };
-
-    state.tableMelds.push({
-      id: newMeldId(),
-      owner: action.player,
+  removeFromHand(state, player, allIds);
+  state.playersPublic[player].opened = true;
+  addEvent(state, "OPEN", `Player ${player + 1} opened with ${points} points.`, { player });
+  valid.forEach((validation) => {
+    const meld: Meld = {
+      id: newMeldId(state),
+      owner: player,
       cardIds: validation.orderedIds,
       kind: validation.kind,
       aceMode: validation.aceMode,
       jokerMap: validation.jokerMap,
-    });
+    };
+    burnOrActivateMeld(state, meld, validation.complete, player);
+  });
+  return success();
+}
 
-    state.playersPublic[action.player].opened = true;
-    state.phase = "DISCARD";
-    return { ok: true };
+function layMeld(state: GameState, player: PlayerID, proposal: MeldProposal): ActionResult {
+  const { cardIds } = proposal;
+  if (state.phase !== "ACTION") return failure("Draw before creating a meld.");
+  if (!state.playersPublic[player].opened) return failure("You must open before playing additional melds.");
+  const handError = uniqueKnownHandCards(state, player, cardIds);
+  if (handError) return failure(handError);
+  if (state.playersPrivate[player].hand.length - cardIds.length < 1) {
+    return failure("You must keep one card for the required final discard.");
+  }
+  const validation = GroupValidator.validateMeld(cardIds.map((id) => state.cardsById[id]), {
+    kind: proposal.kind,
+    aceMode: proposal.aceMode,
+    fixedJokerMap: proposal.jokerMap,
+  });
+  if (!validation.ok) return failure(validation.error);
+  removeFromHand(state, player, cardIds);
+  const meld: Meld = {
+    id: newMeldId(state),
+    owner: player,
+    cardIds: validation.orderedIds,
+    kind: validation.kind,
+    aceMode: validation.aceMode,
+    jokerMap: validation.jokerMap,
+  };
+  addEvent(state, "CREATE_MELD", `Player ${player + 1} created a ${validation.kind.toLowerCase()}.`, { player, id: meld.id });
+  burnOrActivateMeld(state, meld, validation.complete, player);
+  return success();
+}
+
+function addToMeld(state: GameState, player: PlayerID, meldId: string, proposal: MeldProposal): ActionResult {
+  const { cardIds } = proposal;
+  if (state.phase !== "ACTION") return failure("Draw before extending a meld.");
+  if (!state.playersPublic[player].opened) return failure("You must open before extending table melds.");
+  const handError = uniqueKnownHandCards(state, player, cardIds);
+  if (handError) return failure(handError);
+  if (state.playersPrivate[player].hand.length - cardIds.length < 1) {
+    return failure("You must keep one card for the required final discard.");
+  }
+  const meldIndex = state.tableMelds.findIndex((meld) => meld.id === meldId);
+  if (meldIndex < 0) return failure("That active meld no longer exists.");
+  const meld = state.tableMelds[meldIndex];
+  const combinedIds = [...meld.cardIds, ...cardIds];
+  const validation = GroupValidator.validateMeld(
+    combinedIds.map((id) => state.cardsById[id]),
+    {
+      kind: meld.kind,
+      fixedJokerMap: { ...proposal.jokerMap, ...meld.jokerMap },
+    },
+  );
+  if (!validation.ok) return failure(validation.error);
+  removeFromHand(state, player, cardIds);
+  const updated: Meld = {
+    ...meld,
+    cardIds: validation.orderedIds,
+    aceMode: validation.aceMode,
+    jokerMap: validation.jokerMap,
+  };
+  state.tableMelds.splice(meldIndex, 1);
+  addEvent(state, "EXTEND_MELD", `Player ${player + 1} extended a table meld.`, { player, id: meldId });
+  burnOrActivateMeld(state, updated, validation.complete, player);
+  return success();
+}
+
+function replaceJoker(
+  state: GameState,
+  player: PlayerID,
+  meldId: string,
+  jokerId: CardID,
+  replacementId: CardID,
+): ActionResult {
+  if (state.phase !== "ACTION") return failure("Draw before replacing a Joker.");
+  if (!state.playersPublic[player].opened) return failure("You must open before replacing a Joker.");
+  const meld = state.tableMelds.find((candidate) => candidate.id === meldId);
+  if (!meld || !meld.cardIds.includes(jokerId)) return failure("That Joker is not in the selected active meld.");
+  const represented = meld.jokerMap[jokerId];
+  const replacement = state.cardsById[replacementId];
+  if (!represented || !replacement) return failure("The Joker or replacement card is unknown.");
+  if (!state.playersPrivate[player].hand.includes(replacementId)) return failure("The replacement card must be in your hand.");
+  if (replacement.rank !== represented.rank || replacement.suit !== represented.suit) {
+    return failure("The replacement must be the exact card represented by the Joker.");
   }
 
-  if (action.type === "LAY_MELD") {
-    if (state.phase !== "ACTION") return { ok: false, error: "Not in ACTION phase." };
-    if (!state.playersPublic[action.player].opened) return { ok: false, error: "Must open first." };
+  const replacementIds = meld.cardIds.map((id) => (id === jokerId ? replacementId : id));
+  const validation = GroupValidator.validateMeld(replacementIds.map((id) => state.cardsById[id]), {
+    kind: meld.kind,
+  });
+  if (!validation.ok) return failure(validation.error);
+  removeFromHand(state, player, [replacementId]);
+  addToHand(state, player, [jokerId]);
+  meld.cardIds = validation.orderedIds;
+  meld.aceMode = validation.aceMode;
+  meld.jokerMap = validation.jokerMap;
+  addEvent(state, "REPLACE_JOKER", `Player ${player + 1} replaced and freed a Joker.`, { player, id: meldId });
+  return success();
+}
 
-    const handLen = state.playersPrivate[action.player].hand.length;
-    if (handLen - action.cardIds.length < 1) return { ok: false, error: "Must keep one to discard." };
-
-    const validation = GroupValidator.validateMeld(dtoByIds(state, action.cardIds));
-    if (!validation.ok) return { ok: false, error: validation.error };
-
-    if (!removeFromHand(state, action.player, action.cardIds)) return { ok: false, error: "Card not in hand." };
-
-    state.tableMelds.push({
-      id: newMeldId(),
-      owner: action.player,
-      cardIds: validation.orderedIds,
-      kind: validation.kind,
-      aceMode: validation.aceMode,
-      jokerMap: validation.jokerMap,
-    });
-
-    state.phase = "DISCARD";
-    return { ok: true };
+function discard(state: GameState, player: PlayerID, cardIds: CardID[]): ActionResult {
+  if (state.phase !== "DISCARD") return failure("Finish or pass your action phase before discarding.");
+  if (cardIds.length !== 1) return failure("Discard exactly one card.");
+  const id = cardIds[0];
+  if (state.lastDrawSource === "DISCARD" && state.lastDrawnCardId === id) {
+    return failure("You cannot immediately discard the same physical card you took from the trash.");
   }
+  if (!removeFromHand(state, player, [id])) return failure("The discarded card must be in your hand.");
+  state.discard.push(id);
+  addEvent(state, "DISCARD", `Player ${player + 1} discarded a card.`, { player, cardId: id });
 
-  if (action.type === "ADD_TO_MELD") {
-    if (state.phase !== "ACTION") return { ok: false, error: "Not in ACTION phase." };
-    if (!state.playersPublic[action.player].opened) return { ok: false, error: "Must open first." };
-
-    const meld = state.tableMelds.find((m) => m.id === action.meldId);
-    if (!meld) return { ok: false, error: "Meld not found." };
-
-    const handLen = state.playersPrivate[action.player].hand.length;
-    if (handLen - action.cardIds.length < 1) return { ok: false, error: "Must keep one to discard." };
-
-    // remove from hand first
-    if (!removeFromHand(state, action.player, action.cardIds)) return { ok: false, error: "Card not in hand." };
-
-    const combinedIds = [...meld.cardIds, ...action.cardIds];
-    const validation = GroupValidator.validateMeld(dtoByIds(state, combinedIds));
-
-    if (!validation.ok) {
-      // rollback
-      addBackToHand(state, action.player, action.cardIds);
-      return { ok: false, error: validation.error };
-    }
-
-    meld.cardIds = validation.orderedIds;
-    meld.kind = validation.kind;
-    meld.aceMode = validation.aceMode;
-    meld.jokerMap = validation.jokerMap;
-
-    state.phase = "DISCARD";
-    return { ok: true };
+  if (state.playersPrivate[player].hand.length === 0) {
+    state.winner = player;
+    state.phase = "GAME_OVER";
+    addEvent(state, "WIN", `Player ${player + 1} won the game.`, { player });
+    return success();
   }
+  nextTurn(state);
+  return success();
+}
 
-  if (action.type === "SWAP_JOKER") {
-    if (state.phase !== "ACTION") return { ok: false, error: "Not in ACTION phase." };
-    if (!state.playersPublic[action.player].opened) return { ok: false, error: "Must open first." };
+function applyActionToDraft(state: GameState, action: Action): ActionResult {
+  const playerError = ensurePlayer(state, action.player);
+  if (playerError) return failure(playerError);
 
-    const meld = state.tableMelds.find((m) => m.id === action.meldId);
-    if (!meld) return { ok: false, error: "Meld not found." };
-    if (!meld.cardIds.includes(action.jokerId)) return { ok: false, error: "Joker not in meld." };
-
-    const rep = meld.jokerMap[action.jokerId];
-    if (!rep) return { ok: false, error: "This joker has no stored substitution." };
-
-    const replaceDto = state.cardsById[action.replaceWithId];
-    if (!replaceDto) return { ok: false, error: "Replacement card not found." };
-
-    if (replaceDto.rank !== rep.rank || replaceDto.suit !== rep.suit) {
-      return { ok: false, error: "Replacement card does not match joker substitution." };
-    }
-
-    // remove replacement from hand
-    if (!removeFromHand(state, action.player, [action.replaceWithId])) {
-      return { ok: false, error: "Replacement card not in hand." };
-    }
-
-    // swap
-    meld.cardIds = meld.cardIds.map((id) => (id === action.jokerId ? action.replaceWithId : id));
-
-    // give joker to player
-    state.playersPrivate[action.player].hand.push(action.jokerId);
-    state.playersPublic[action.player].handCount = state.playersPrivate[action.player].hand.length;
-
-    // revalidate
-    const validation = GroupValidator.validateMeld(dtoByIds(state, meld.cardIds));
-    if (!validation.ok) {
-      // rollback
-      const h = state.playersPrivate[action.player].hand;
-      const jIdx = h.indexOf(action.jokerId);
-      if (jIdx >= 0) h.splice(jIdx, 1);
-      h.push(action.replaceWithId);
-      state.playersPublic[action.player].handCount = h.length;
-
-      meld.cardIds = meld.cardIds.map((id) => (id === action.replaceWithId ? action.jokerId : id));
-      return { ok: false, error: validation.error };
-    }
-
-    meld.cardIds = validation.orderedIds;
-    meld.kind = validation.kind;
-    meld.aceMode = validation.aceMode;
-    meld.jokerMap = validation.jokerMap;
-
-    // stay in ACTION
-    return { ok: true };
+  switch (action.type) {
+    case "DRAW_DECK": return drawFromDeck(state, action.player);
+    case "DRAW_DISCARD": return drawFromDiscard(state, action.player);
+    case "OPEN_GROUP": return openWithGroups(state, action.player, [action.cardIds]);
+    case "OPEN_MULTI": return openWithGroups(state, action.player, action.groups);
+    case "LAY_MELD": return layMeld(state, action.player, action);
+    case "ADD_TO_MELD": return addToMeld(state, action.player, action.meldId, action);
+    case "SWAP_JOKER": return replaceJoker(
+      state,
+      action.player,
+      action.meldId,
+      action.jokerId,
+      action.replaceWithId,
+    );
+    case "PASS_ACTION":
+      if (state.phase !== "ACTION") return failure("There is no action phase to finish.");
+      if (!state.playersPublic[action.player].opened && state.lastDrawSource === "DISCARD") {
+        return failure("After taking trash while closed, you must open using that card.");
+      }
+      state.phase = "DISCARD";
+      return success();
+    case "DISCARD": return discard(state, action.player, action.cardId);
   }
+}
 
-  if (action.type === "PASS_ACTION") {
-    if (state.phase !== "ACTION") return { ok: false, error: "Not in ACTION phase." };
-    state.phase = "DISCARD";
-    return { ok: true };
+/**
+ * Applies a requested move atomically. Invalid moves and invariant failures leave
+ * the authoritative input state unchanged.
+ */
+export function applyAction(state: GameState, action: Action): ActionResult {
+  const draft = structuredClone(state);
+  const result = applyActionToDraft(draft, action);
+  if (!result.ok) return result;
+  const invariantErrors = validateStateInvariants(draft);
+  if (invariantErrors.length > 0) {
+    return failure(`Move rejected because it would corrupt game state: ${invariantErrors[0]}`);
   }
-
-  if (action.type === "DISCARD") {
-    if (state.phase !== "DISCARD") return { ok: false, error: "Not in DISCARD phase." };
-    if (action.cardId.length !== 1) return { ok: false, error: "Discard exactly one card." };
-
-    const id = action.cardId[0];
-    if (!removeFromHand(state, action.player, [id])) return { ok: false, error: "Card not in hand." };
-
-    state.discard.push(id);
-
-    if (state.playersPrivate[action.player].hand.length === 0) {
-      state.winner = action.player;
-      state.phase = "GAME_OVER";
-      return { ok: true };
-    }
-
-    nextTurn(state);
-    return { ok: true };
-  }
-
-  return { ok: false, error: "Unknown action." };
+  Object.assign(state, draft);
+  return success();
 }

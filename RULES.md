@@ -242,6 +242,8 @@ Because there are only four suits, an active set can normally contain three card
 
 The fourth unique suit completes it.
 
+For table presentation, cards in a set should alternate colors whenever possible: red-black-red or black-red-black. Suit order within those color positions is not important and does not affect legality.
+
 ---
 
 # 13. Multiple Sets of the Same Rank
@@ -313,6 +315,10 @@ Therefore this is invalid:
 * Q, K, A, 2, 3
 
 A sequence can progress toward Ace from either legal direction, but it cannot loop from high Ace back into 2.
+
+Ace position is derived from the run's current cards; it is not a permanent low/high setting chosen when the run is created. A run such as 10-J-Q-K must accept an Ace after the King even if it was originally placed without an Ace. Whenever cards are added, the complete run is re-evaluated and the Ace is automatically placed at the only legal end.
+
+If both complete orientations are theoretically possible, the distinction has no gameplay effect because the 13-card run immediately burns. Joker replacement still uses the Joker's visible represented identity; an Ace replaces a Joker when that Joker occupies the Ace position.
 
 ---
 
@@ -1026,8 +1032,10 @@ Before considering the rules implementation complete, add automated tests for at
 * A-2-3 accepted
 * Q-K-A accepted
 * Q-K-A-2 rejected
+* Existing 10-J-Q-K run accepts Ace without a preselected Ace mode
 * Complete A-through-K run burns
 * Complete 2-through-A run burns
+* Existing 2-through-K run burns when Ace is added
 
 ### Opening
 
@@ -1095,5 +1103,3 @@ When implementing this project, prioritize:
 Do not sacrifice rule correctness to rush multiplayer or visual polish.
 
 The end result should feel like an actual online implementation of Card51 rather than a generic rummy game with approximately similar rules.
-
-

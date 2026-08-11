@@ -1,34 +1,28 @@
 import type { CardDTO } from "./types";
-import { Rank, Suit } from "./card";
+import { Rank, STANDARD_RANKS, STANDARD_SUITS, Suit } from "./card";
 
-function uid(): string {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
-}
-
-function shuffleInPlace<T>(arr: T[]): void {
+export function shuffleInPlace<T>(arr: T[], random: () => number = Math.random): void {
   for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = Math.floor(random() * (i + 1));
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
 }
 
 // Matches your Java: 2 decks of normal cards, plus 2 jokers total
-export function makeShuffledDeck(): CardDTO[] {
+export function makeShuffledDeck(random: () => number = Math.random): CardDTO[] {
   const out: CardDTO[] = [];
 
   for (let d = 0; d < 2; d++) {
-    for (const s of Object.values(Suit)) {
-      if (s === Suit.JOKER) continue;
-      for (const r of Object.values(Rank)) {
-        if (r === Rank.JOKER) continue;
-        out.push({ id: uid(), suit: s, rank: r });
+    for (const s of STANDARD_SUITS) {
+      for (const r of STANDARD_RANKS) {
+        out.push({ id: `deck${d + 1}-${r}-${s}`, suit: s, rank: r });
       }
     }
   }
 
-  out.push({ id: uid(), suit: Suit.JOKER, rank: Rank.JOKER });
-  out.push({ id: uid(), suit: Suit.JOKER, rank: Rank.JOKER });
+  out.push({ id: "joker-1", suit: Suit.JOKER, rank: Rank.JOKER });
+  out.push({ id: "joker-2", suit: Suit.JOKER, rank: Rank.JOKER });
 
-  shuffleInPlace(out);
+  shuffleInPlace(out, random);
   return out;
 }

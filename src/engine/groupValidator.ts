@@ -1,218 +1,253 @@
-// src/engine/groupValidator.ts
-//
-// Direct port of your Java GroupValidator, including Ace LOW/HIGH run logic
-// and the joker "fills gaps" rule.
-
-import type { CardDTO, CardID } from "./types";
-import { Rank, Suit } from "./card";
-
+import { cardPointValue, Rank, STANDARD_SUITS, Suit } from "./card";
+import type { AceMode as AceModeType, CardDTO, CardID, Meld, MeldKind } from "./types";
 
 export const AceMode = {
   LOW: "LOW",
   HIGH: "HIGH",
-} as const;
+} as const satisfies Record<string, AceModeType>;
 
-export type AceMode = typeof AceMode[keyof typeof AceMode];
+export type JokerRep = { suit: Suit; rank: Rank };
 
-export type JokerRep = {
-  suit: Suit;
-  rank: Rank;
+export type MeldValidation =
+  | {
+      ok: true;
+      kind: MeldKind;
+      aceMode?: AceModeType;
+      orderedIds: CardID[];
+      jokerMap: Record<CardID, JokerRep>;
+      points: number;
+      complete: boolean;
+    }
+  | { ok: false; error: string };
+
+export type MeldValidationOptions = {
+  kind?: MeldKind;
+  aceMode?: AceModeType;
+  fixedJokerMap?: Partial<Record<CardID, JokerRep>>;
+};
+
+const rankIndex = (rank: Rank, mode: AceModeType): number => {
+  if (rank === Rank.ACE) return mode === AceMode.HIGH ? 14 : 1;
+  const order: Rank[] = [
+    Rank.TWO, Rank.THREE, Rank.FOUR, Rank.FIVE, Rank.SIX, Rank.SEVEN,
+    Rank.EIGHT, Rank.NINE, Rank.TEN, Rank.JACK, Rank.QUEEN, Rank.KING,
+  ];
+  const index = order.indexOf(rank);
+  return index < 0 ? 0 : index + 2;
+};
+
+const indexToRank = (value: number): Rank => {
+  const ranks: Record<number, Rank> = {
+    1: Rank.ACE, 2: Rank.TWO, 3: Rank.THREE, 4: Rank.FOUR, 5: Rank.FIVE,
+    6: Rank.SIX, 7: Rank.SEVEN, 8: Rank.EIGHT, 9: Rank.NINE, 10: Rank.TEN,
+    11: Rank.JACK, 12: Rank.QUEEN, 13: Rank.KING, 14: Rank.ACE,
+  };
+  return ranks[value] ?? Rank.JOKER;
+};
+
+const isJoker = (card: CardDTO): boolean => card.rank === Rank.JOKER;
+
+function hasValidCards(cards: ReadonlyArray<CardDTO | undefined>): cards is ReadonlyArray<CardDTO> {
+  return cards.every(Boolean);
 }
 
-export type MeldValidation = |{
-  ok: true;
-  kind: "SET" | "RUN";
-  aceMode?: AceMode;
-  orderedIds: CardID[];
-  jokerMap: Record<CardID, JokerRep>;
-} | {
-  ok: false;
-  error: string;
+function matchesFixedRepresentations(
+  jokerMap: Record<CardID, JokerRep>,
+  fixed: Partial<Record<CardID, JokerRep>> | undefined,
+): boolean {
+  if (!fixed) return true;
+  return Object.entries(fixed).every(([id, expected]) => {
+    const actual = jokerMap[id];
+    return !expected || (actual?.rank === expected.rank && actual.suit === expected.suit);
+  });
 }
 
-const SUIT_ORDER: Suit[] = [Suit.CLUBS, Suit.DIAMONDS, Suit.HEARTS, Suit.SPADES];
-
-function rankIndex(rank: Rank, mode: AceMode): number {
-  switch (rank) {
-    case Rank.TWO: return 2;
-    case Rank.THREE: return 3;
-    case Rank.FOUR: return 4;
-    case Rank.FIVE: return 5;
-    case Rank.SIX: return 6;
-    case Rank.SEVEN: return 7;
-    case Rank.EIGHT: return 8;
-    case Rank.NINE: return 9;
-    case Rank.TEN: return 10;
-    case Rank.JACK: return 11;
-    case Rank.QUEEN: return 12;
-    case Rank.KING: return 13;
-    case Rank.ACE: return mode === AceMode.HIGH ? 14 : 1;
-    default: return 0;
-  }
-}
-
-function indexToRank(idx: number, mode: AceMode): Rank {
-  // idx is 1..14 (depending on mode)
-  switch (idx) {
-    case 1: return Rank.ACE; // only meaningful for LOW
-    case 2: return Rank.TWO;
-    case 3: return Rank.THREE;
-    case 4: return Rank.FOUR;
-    case 5: return Rank.FIVE;
-    case 6: return Rank.SIX;
-    case 7: return Rank.SEVEN;
-    case 8: return Rank.EIGHT;
-    case 9: return Rank.NINE;
-    case 10: return Rank.TEN;
-    case 11: return Rank.JACK;
-    case 12: return Rank.QUEEN;
-    case 13: return Rank.KING;
-    case 14: return Rank.ACE; // only meaningful for HIGH
-    default: return Rank.JOKER;
-  }
-}
-
-function isJoker(c: CardDTO): boolean {
-  return c.rank === Rank.JOKER;
+function pointsFor(cards: ReadonlyArray<CardDTO>, jokerMap: Record<CardID, JokerRep>): number {
+  return cards.reduce((sum, card) => {
+    const represented = isJoker(card) ? jokerMap[card.id] : undefined;
+    return sum + cardPointValue(represented?.rank ?? card.rank);
+  }, 0);
 }
 
 export class GroupValidator {
-  //one entry point that decides set vs run (low/high ace)
-  public static validateMeld(cards: ReadonlyArray<CardDTO>): MeldValidation {
-    const setRes = this.validateSet(cards);
-    if (setRes.ok) return setRes;
+  public static validateMeld(
+    cards: ReadonlyArray<CardDTO | undefined>,
+    options: MeldValidationOptions = {},
+  ): MeldValidation {
+    if (!hasValidCards(cards)) return { ok: false, error: "Meld contains an unknown card." };
+    if (new Set(cards.map((card) => card.id)).size !== cards.length) {
+      return { ok: false, error: "A physical card cannot appear twice in one meld." };
+    }
 
-    const low = this.validateRun(cards, AceMode.LOW);
-    if (low.ok) return low;
+    if (!options.kind || options.kind === "SET") {
+      const set = this.validateSet(cards, options.fixedJokerMap);
+      if (set.ok) return set;
+      if (options.kind === "SET") return set;
+    }
 
-    const high = this.validateRun(cards, AceMode.HIGH);
-    if (high.ok) return high;
+    if (!options.kind || options.kind === "RUN") {
+      const modes: AceModeType[] = options.aceMode ? [options.aceMode] : [AceMode.LOW, AceMode.HIGH];
+      const candidates = modes
+        .map((mode) => this.validateRun(cards, mode, options.fixedJokerMap))
+        .filter((result): result is Extract<MeldValidation, { ok: true }> => result.ok)
+        .sort((a, b) => b.points - a.points || (a.aceMode === AceMode.LOW ? -1 : 1));
+      if (candidates[0]) return candidates[0];
+    }
+
+    return { ok: false, error: "Cards do not form a valid set or run." };
+  }
+
+  public static validateSet(
+    cards: ReadonlyArray<CardDTO | undefined>,
+    fixedJokerMap?: Partial<Record<CardID, JokerRep>>,
+  ): MeldValidation {
+    if (!hasValidCards(cards)) return { ok: false, error: "Set contains an unknown card." };
+    if (cards.length < 3 || cards.length > 4) {
+      return { ok: false, error: "A set must contain three or four cards." };
+    }
+    if (new Set(cards.map((card) => card.id)).size !== cards.length) {
+      return { ok: false, error: "A physical card cannot appear twice in one set." };
+    }
+
+    const jokers = cards.filter(isJoker).sort((a, b) => a.id.localeCompare(b.id));
+    const natural = cards.filter((card) => !isJoker(card));
+    if (fixedJokerMap && Object.keys(fixedJokerMap).some((id) => !jokers.some((joker) => joker.id === id))) {
+      return { ok: false, error: "Only Jokers in this meld may receive represented identities." };
+    }
+    if (natural.length === 0) return { ok: false, error: "A set needs a natural card to establish its rank." };
+
+    const rank = natural[0].rank;
+    if (!natural.every((card) => card.rank === rank)) {
+      return { ok: false, error: "Every card in a set must have the same rank." };
+    }
+    const naturalSuits = natural.map((card) => card.suit);
+    if (new Set(naturalSuits).size !== naturalSuits.length) {
+      return { ok: false, error: "A set cannot contain duplicate suits." };
+    }
+
+    const missingSuits = STANDARD_SUITS.filter((suit) => !naturalSuits.includes(suit));
+    const jokerMap: Record<CardID, JokerRep> = {};
+    const reserved = new Set<Suit>();
+
+    for (const joker of jokers) {
+      const fixed = fixedJokerMap?.[joker.id];
+      if (!fixed) continue;
+      if (fixed.rank !== rank || !missingSuits.includes(fixed.suit) || reserved.has(fixed.suit)) {
+        return { ok: false, error: "A Joker's represented card must preserve the set." };
+      }
+      jokerMap[joker.id] = fixed;
+      reserved.add(fixed.suit);
+    }
+    for (const joker of jokers) {
+      if (jokerMap[joker.id]) continue;
+      const suit = missingSuits.find((candidate) => !reserved.has(candidate));
+      if (!suit) return { ok: false, error: "There are too many Jokers for this set." };
+      jokerMap[joker.id] = { rank, suit };
+      reserved.add(suit);
+    }
+
+    const representedSuit = (card: CardDTO): Suit => isJoker(card) ? jokerMap[card.id].suit : card.suit;
+    const suitOrder: Suit[] = [Suit.CLUBS, Suit.DIAMONDS, Suit.SPADES, Suit.HEARTS];
+    const bySuit = (a: CardDTO, b: CardDTO): number => suitOrder.indexOf(representedSuit(a)) - suitOrder.indexOf(representedSuit(b));
+    const isRed = (suit: Suit): boolean => suit === Suit.DIAMONDS || suit === Suit.HEARTS;
+    const red = cards.filter((card) => isRed(representedSuit(card))).sort(bySuit);
+    const black = cards.filter((card) => !isRed(representedSuit(card))).sort(bySuit);
+    const first = red.length > black.length ? red : black;
+    const second = first === red ? black : red;
+    const alternating: CardDTO[] = [];
+    for (let index = 0; index < first.length; index++) {
+      if (first[index]) alternating.push(first[index]);
+      if (second[index]) alternating.push(second[index]);
+    }
+    const orderedIds = alternating.map((card) => card.id);
 
     return {
-      ok: false,
-      error: "Not a valid set or run."
-    } ;
+      ok: true,
+      kind: "SET",
+      orderedIds,
+      jokerMap,
+      points: pointsFor(cards, jokerMap),
+      complete: cards.length === 4,
+    };
   }
 
-  public static validateSet(cards: ReadonlyArray<CardDTO>): MeldValidation {
-    if (cards.length < 3 || cards.length > 4) {
-      return { ok: false, error: "Set must be size 3 or 4." };
+  public static validateRun(
+    cards: ReadonlyArray<CardDTO | undefined>,
+    mode: AceModeType,
+    fixedJokerMap?: Partial<Record<CardID, JokerRep>>,
+  ): MeldValidation {
+    if (!hasValidCards(cards)) return { ok: false, error: "Run contains an unknown card." };
+    if (cards.length < 3 || cards.length > 13) {
+      return { ok: false, error: "A run must contain between three and thirteen cards." };
+    }
+    if (new Set(cards.map((card) => card.id)).size !== cards.length) {
+      return { ok: false, error: "A physical card cannot appear twice in one run." };
     }
 
-    const jokers = cards.filter(isJoker);
-    const non = cards.filter((c) => !isJoker(c));
-
-    if(non.length === 0) return { ok: false, error: "Set must have at least one non-joker card." };
-
-    // All non-jokers must share rank
-    const rank = non[0].rank;
-    for (const c of non) if (c.rank !== rank) return { ok: false, error: "Set ranks must match." };
-
-    // Suits unique among non-jokers
-    const suitSet = new Set<Suit>();
-    for (const c of non) {
-      if (suitSet.has(c.suit)) return { ok: false, error: "Duplicate suit in set." };
-      suitSet.add(c.suit);
+    const jokers = cards.filter(isJoker).sort((a, b) => a.id.localeCompare(b.id));
+    const natural = cards.filter((card) => !isJoker(card));
+    if (fixedJokerMap && Object.keys(fixedJokerMap).some((id) => !jokers.some((joker) => joker.id === id))) {
+      return { ok: false, error: "Only Jokers in this meld may receive represented identities." };
+    }
+    if (natural.length === 0) return { ok: false, error: "A run needs a natural card to establish its suit." };
+    const suit = natural[0].suit;
+    if (!natural.every((card) => card.suit === suit)) {
+      return { ok: false, error: "Every card in a run must have the same suit." };
     }
 
-
-    if(suitSet.size + jokers.length !== cards.length) return {ok: false, error: "Invalid set size."};
-
-    // Canonical joker mapping: fill missing suits in SUIT_ORDER
-    const missing = SUIT_ORDER.filter((s) => !suitSet.has(s));
-    const jokerIds = jokers.map((c) => c.id).sort();
-    const jokerMap: Record<CardID, JokerRep> = {};
-
-    for(let i = 0; i < jokerIds.length; i++) {
-      const suit = missing[i];
-      if (!suit) return { ok: false, error: "Too many jokers for set." };
-      jokerMap[jokerIds[i]] = { suit, rank: rank };
+    const naturalIndexes = natural.map((card) => rankIndex(card.rank, mode));
+    if (new Set(naturalIndexes).size !== naturalIndexes.length) {
+      return { ok: false, error: "A run cannot contain duplicate ranks." };
     }
 
-    // Order: non-jokers first by suit order, then jokers in order of assigned suit
+    const minRank = mode === AceMode.LOW ? 1 : 2;
+    const maxRank = mode === AceMode.LOW ? 13 : 14;
+    const candidates: Extract<MeldValidation, { ok: true }>[] = [];
+    for (let start = minRank; start <= maxRank - cards.length + 1; start++) {
+      const end = start + cards.length - 1;
+      if (!naturalIndexes.every((value) => value >= start && value <= end)) continue;
 
-    const orderedNon = [...non].sort((a, b) => SUIT_ORDER.indexOf(a.suit) - SUIT_ORDER.indexOf(b.suit));
-    const orderedIds = [...orderedNon.map((c) => c.id), ...jokerIds];
-
-    return { ok: true, kind: "SET", orderedIds, jokerMap };
-  }
-
-public static validateRun(cards: ReadonlyArray<CardDTO>, mode: AceMode): MeldValidation {
-    if (cards.length < 3) return { ok: false, error: "Run must be at least 3 cards." };
-
-    const jokers = cards.filter(isJoker);
-    const non = cards.filter((c) => !isJoker(c));
-
-    if (non.length === 0) return { ok: false, error: "Run cannot be all jokers." };
-
-    // All non-jokers must share suit
-    const suit = non[0].suit;
-    for (const c of non) if (c.suit !== suit) return { ok: false, error: "Run suit must match." };
-
-    // No duplicate ranks among non-jokers
-    const idxs = non.map((c) => rankIndex(c.rank, mode)).sort((a, b) => a - b);
-    for (let i = 1; i < idxs.length; i++) {
-      if (idxs[i] === idxs[i - 1]) return { ok: false, error: "Duplicate rank in run." };
-    }
-
-    const len = cards.length;
-    const min = idxs[0];
-    const max = idxs[idxs.length - 1];
-
-    // Find a canonical contiguous window [start..start+len-1] that can contain all non-jokers
-    // and be completed with available jokers. Choose smallest start that works.
-    const maxRank = mode === AceMode.HIGH ? 14 : 13; // LOW run uses Ace=1..13
-    const minRank = mode === AceMode.HIGH ? 2 : 1;
-
-    let chosenStart: number | null = null;
-    for (let start = minRank; start <= maxRank - len + 1; start++) {
-      const end = start + len - 1;
-      if (min < start || max > end) continue;
-
-      // Non-joker indices must be inside window, distinct already ensured
-      const missing = len - idxs.length;
-      if (missing <= jokers.length) {
-        chosenStart = start;
-        break;
+      const missing: number[] = [];
+      for (let value = start; value <= end; value++) {
+        if (!naturalIndexes.includes(value)) missing.push(value);
       }
-    }
+      if (missing.length !== jokers.length) continue;
 
-    if (chosenStart === null) return { ok: false, error: "Run cannot be completed with jokers." };
+      const jokerMap: Record<CardID, JokerRep> = {};
+      jokers.forEach((joker, index) => {
+        jokerMap[joker.id] = { suit, rank: indexToRank(missing[index]) };
+      });
+      if (!matchesFixedRepresentations(jokerMap, fixedJokerMap)) continue;
 
-    const start = chosenStart;
-    const end = start + len - 1;
-    const present = new Set<number>(idxs);
-
-    const missingIdxs: number[] = [];
-    for (let v = start; v <= end; v++) {
-      if (!present.has(v)) missingIdxs.push(v);
-    }
-
-    const jokerIds = jokers.map((c) => c.id).sort();
-    const jokerMap: Record<CardID, JokerRep> = {};
-
-    for (let i = 0; i < jokerIds.length; i++) {
-      const target = missingIdxs[i];
-      if (target === undefined) {
-        // extra jokers: push them to the highest end by convention (end+1, end+2 not allowed in fixed window),
-        // so we reject for now to keep rules consistent.
-        return { ok: false, error: "Too many jokers for chosen run window." };
+      const byIndex = new Map(natural.map((card) => [rankIndex(card.rank, mode), card.id]));
+      const jokerByIndex = new Map(jokers.map((joker, index) => [missing[index], joker.id]));
+      const orderedIds: CardID[] = [];
+      for (let value = start; value <= end; value++) {
+        orderedIds.push(byIndex.get(value) ?? jokerByIndex.get(value)!);
       }
-      jokerMap[jokerIds[i]] = { suit, rank: indexToRank(target, mode) };
+      const usesAceBoundary = natural.some((card) => card.rank === Rank.ACE)
+        || Object.values(jokerMap).some((represented) => represented.rank === Rank.ACE);
+      candidates.push({
+        ok: true,
+        kind: "RUN",
+        aceMode: usesAceBoundary ? mode : undefined,
+        orderedIds,
+        jokerMap,
+        points: pointsFor(cards, jokerMap),
+        complete: cards.length === 13,
+      });
     }
 
-    // Normalize order: run from start..end. Put real cards where they match, jokers where missing.
-    const byIndex: Record<number, CardID> = {};
-    for (const c of non) byIndex[rankIndex(c.rank, mode)] = c.id;
-
-    const orderedIds: CardID[] = [];
-    let jokerCursor = 0;
-    for (let v = start; v <= end; v++) {
-      const realId = byIndex[v];
-      if (realId) orderedIds.push(realId);
-      else orderedIds.push(jokerIds[jokerCursor++]);
-    }
-
-    return { ok: true, kind: "RUN", aceMode: mode, orderedIds, jokerMap };
+    candidates.sort((a, b) => b.points - a.points || a.orderedIds.join().localeCompare(b.orderedIds.join()));
+    return candidates[0] ?? { ok: false, error: "Run ranks must be sequential without wrapping the Ace." };
   }
+}
+
+export function calculateMeldValue(meld: Pick<Meld, "cardIds" | "jokerMap">, cardsById: Record<CardID, CardDTO>): number {
+  return meld.cardIds.reduce((sum, id) => {
+    const card = cardsById[id];
+    if (!card) return sum;
+    const represented = card.rank === Rank.JOKER ? meld.jokerMap[id] : undefined;
+    return sum + cardPointValue(represented?.rank ?? card.rank);
+  }, 0);
 }

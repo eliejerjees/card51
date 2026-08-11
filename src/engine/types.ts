@@ -1,5 +1,4 @@
 import type { Rank, Suit } from "./card";
-import type { AceMode } from "./groupValidator";
 
 export type CardID = string;
 
@@ -11,24 +10,46 @@ export type CardDTO = {
 
 export type DrawSource = "DECK" | "DISCARD";
 
-export type PlayerID = 0 | 1 | 2 | 3;
+export type PlayerID = number;
 
 export type Phase = "DRAW" | "ACTION" | "DISCARD" | "GAME_OVER";
+
+export type AceMode = "LOW" | "HIGH";
 
 export type JokerRep = {
   suit: Suit;
   rank: Rank;
 }
 
-export type meldKind = "SET" | "RUN";
+export type MeldKind = "SET" | "RUN";
 
 export type Meld = {
   id: string;
   owner: PlayerID;
   cardIds: CardID[];
-  kind: meldKind;
+  kind: MeldKind;
   aceMode?: AceMode;
   jokerMap: Record<CardID, { suit: Suit; rank: Rank }>;
+};
+
+export type GameEventType =
+  | "DRAW_DECK"
+  | "DRAW_DISCARD"
+  | "OPEN"
+  | "CREATE_MELD"
+  | "EXTEND_MELD"
+  | "REPLACE_JOKER"
+  | "BURN"
+  | "DISCARD"
+  | "WIN";
+
+export type GameEvent = {
+  id: string;
+  type: GameEventType;
+  message: string;
+  player?: PlayerID;
+  cardId?: CardID;
+  meldId?: string;
 };
 
 
@@ -43,11 +64,12 @@ export type PlayerPrivate = {
 };
 
 export type GameState = {
-  numPlayers: 2 | 3 | 4;
+  numPlayers: number;
   currentTurn: PlayerID;
   phase: Phase;
   winner: PlayerID | null;
 
+  drawPile: CardID[]; // top is last
   deckCount: number;
   discard: CardID[]; // top is last
   lastDrawnCardId: CardID | null;
@@ -61,4 +83,8 @@ export type GameState = {
   playersPrivate: Record<PlayerID, PlayerPrivate>;
 
   tableMelds: Meld[];
+  events: GameEvent[];
+  turnNumber: number;
+  turnTimeLimitMs: number | null;
+  lastBurnedMeld: Meld | null;
 };

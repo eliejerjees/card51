@@ -1,77 +1,114 @@
-import { applyAction } from "./state";
 import type { Action } from "./actions";
-import { AceMode, GroupValidator } from "./groupValidator";
+import { cardPointValue } from "./card";
 import { GameUtils } from "./gameUtils";
-import { Card } from "./card";
-import type { GameState, PlayerID } from "./types";
+import { GroupValidator } from "./groupValidator";
+import { canTakeDiscardForOpening, findOpeningPlan } from "./opening";
+import { createPlayerView, type PlayerGameView } from "./playerView";
+import { applyAction, type ActionResult } from "./state";
+import type { CardID, GameState, PlayerID } from "./types";
 
-function toCard(state: GameState, id: string): Card {
-  const dto = state.cardsById[id];
-  return new Card(dto.suit, dto.rank);
+function usefulOpenDiscard(view: PlayerGameView, discardId: CardID): boolean {
+  const hypothetical = [...view.ownHand, discardId];
+  if (GameUtils.findValidMeldsById(hypothetical, view.cardsById).some((meld) => meld.includes(discardId))) return true;
+  return view.tableMelds.some((meld) => {
+    const validation = GroupValidator.validateMeld(
+      [...meld.cardIds, discardId].map((id) => view.cardsById[id]),
+      { kind: meld.kind, fixedJokerMap: meld.jokerMap },
+    );
+    return validation.ok;
+  });
 }
 
-export function botStep(state: GameState, botId: PlayerID): { ok: boolean; error?: string } {
-  if (state.currentTurn !== botId) return { ok: false, error: "Not bot turn." };
-  if (state.phase === "GAME_OVER") return { ok: false, error: "Game over." };
-
-  // 1) DRAW
-  if (state.phase === "DRAW") {
-    // simple: always draw deck
-    return applyAction(state, { type: "DRAW_DECK", player: botId });
-  }
-
-  const handIds = state.playersPrivate[botId].hand;
-  const handCards = handIds.map((id) => toCard(state, id));
-
-  // 2) ACTION: try to open if not opened, else try best meld, else pass
-  if (state.phase === "ACTION") {
-    // inside ACTION phase
-    const opened = state.playersPublic[botId].opened;
-    const last = state.lastDrawnCardId;
-
-    const melds = GameUtils.findValidMeldsById(handIds, state.cardsById);
-
-    // helper points
-    const points = (ids: string[]) =>
-      ids.reduce((s, id) => s + toCard(state, id).getValue(), 0);
-
-    if (!opened) {
-      if (!last) return applyAction(state, { type: "PASS_ACTION", player: botId });
-
-      const openCandidates = melds
-        .filter((m) => m.includes(last))
-        .filter((m) => points(m) >= 51);
-
-      if (openCandidates.length === 0) {
-        return applyAction(state, { type: "PASS_ACTION", player: botId });
-      }
-
-      // pick best (highest points)
-      openCandidates.sort((a, b) => points(b) - points(a));
-      return applyAction(state, { type: "OPEN_GROUP", player: botId, cardIds: openCandidates[0] });
-    } else {
-      if (melds.length === 0) return applyAction(state, { type: "PASS_ACTION", player: botId });
-
-      // pick a "best" meld: largest size then highest points
-      melds.sort((a, b) => (b.length - a.length) || (points(b) - points(a)));
-      return applyAction(state, { type: "LAY_MELD", player: botId, cardIds: melds[0] });
-    }
-
-  }
-
-  // 3) DISCARD: discard highest value to move toward empty hand later
-  if (state.phase === "DISCARD") {
-    let bestIdx = 0;
-    let bestVal = -1;
-    for (let i = 0; i < handIds.length; i++) {
-      const v = toCard(state, handIds[i]).getValue();
-      if (v > bestVal) {
-        bestVal = v;
-        bestIdx = i;
+function chooseJokerReplacement(view: PlayerGameView): Action | null {
+  for (const meld of view.tableMelds) {
+    for (const [jokerId, represented] of Object.entries(meld.jokerMap)) {
+      const replacementId = view.ownHand.find((id) => {
+        const card = view.cardsById[id];
+        return card.rank === represented.rank && card.suit === represented.suit;
+      });
+      if (replacementId) {
+        return {
+          type: "SWAP_JOKER",
+          player: view.viewer,
+          meldId: meld.id,
+          jokerId,
+          replaceWithId: replacementId,
+        };
       }
     }
-    return applyAction(state, { type: "DISCARD", player: botId, cardId: [handIds[bestIdx]] });
+  }
+  return null;
+}
+
+function chooseMeldExtension(view: PlayerGameView): Action | null {
+  if (view.ownHand.length <= 1) return null;
+  for (const meld of view.tableMelds) {
+    for (const cardId of view.ownHand) {
+      const validation = GroupValidator.validateMeld(
+        [...meld.cardIds, cardId].map((id) => view.cardsById[id]),
+        { kind: meld.kind, fixedJokerMap: meld.jokerMap },
+      );
+      if (validation.ok) {
+        return { type: "ADD_TO_MELD", player: view.viewer, meldId: meld.id, cardIds: [cardId] };
+      }
+    }
+  }
+  return null;
+}
+
+/** Chooses a move using only information visible to this bot player. */
+export function chooseBotAction(view: PlayerGameView): Action | null {
+  if (view.phase === "GAME_OVER" || view.currentTurn !== view.viewer) return null;
+  const player = view.viewer;
+
+  if (view.phase === "DRAW") {
+    const discardId = view.topDiscardId;
+    if (discardId) {
+      const opened = view.playersPublic[player].opened;
+      const shouldTake = opened
+        ? usefulOpenDiscard(view, discardId)
+        : canTakeDiscardForOpening(view.ownHand, discardId, view.cardsById);
+      if (shouldTake) return { type: "DRAW_DISCARD", player };
+    }
+    return { type: "DRAW_DECK", player };
   }
 
-  return { ok: false, error: "No bot move." };
+  if (view.phase === "ACTION") {
+    if (!view.playersPublic[player].opened) {
+      const required = view.lastDrawSource === "DISCARD" ? view.lastDrawnCardId ?? undefined : undefined;
+      const plan = findOpeningPlan(view.ownHand, view.cardsById, required);
+      if (plan) return { type: "OPEN_MULTI", player, groups: plan.map((group) => ({
+        cardIds: group.cardIds,
+        kind: group.validation.kind,
+        aceMode: group.validation.aceMode,
+        jokerMap: group.validation.jokerMap,
+      })) };
+      return { type: "PASS_ACTION", player };
+    }
+
+    const replacement = chooseJokerReplacement(view);
+    if (replacement) return replacement;
+    const extension = chooseMeldExtension(view);
+    if (extension) return extension;
+    const meld = GameUtils.findValidMeldsById(view.ownHand, view.cardsById)
+      .filter((candidate) => view.ownHand.length - candidate.length >= 1)
+      .sort((a, b) => b.length - a.length)[0];
+    if (meld) return { type: "LAY_MELD", player, cardIds: meld };
+    return { type: "PASS_ACTION", player };
+  }
+
+  const legalDiscards = view.ownHand.filter(
+    (id) => !(view.lastDrawSource === "DISCARD" && view.lastDrawnCardId === id),
+  );
+  const discardId = legalDiscards.sort(
+    (a, b) => cardPointValue(view.cardsById[b].rank) - cardPointValue(view.cardsById[a].rank),
+  )[0];
+  return discardId ? { type: "DISCARD", player, cardId: [discardId] } : null;
+}
+
+export function botStep(state: GameState, botId: PlayerID): ActionResult {
+  if (state.currentTurn !== botId) return { ok: false, error: "It is not this bot's turn." };
+  const action = chooseBotAction(createPlayerView(state, botId));
+  if (!action) return { ok: false, error: "The bot has no legal move." };
+  return applyAction(state, action);
 }
