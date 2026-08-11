@@ -1,5 +1,6 @@
 import { AuthoritativeGame, type DispatchResult, type PlayerActionRequest } from "../engine/authority";
 import { chooseBotAction } from "../engine/bot";
+import { secureRandom } from "../engine/deckFactory";
 import type { PlayerGameView } from "../engine/playerView";
 
 export type LobbyVisibility = "PRIVATE" | "MATCHMAKING";
@@ -24,6 +25,7 @@ export type LobbySnapshot = {
   status: LobbyStatus;
   hostUserId: string;
   settings: LobbySettings;
+  turnDeadlineAt: number | null;
   seats: LobbySeat[];
   game: PlayerGameView | null;
 };
@@ -46,7 +48,7 @@ export class LobbyService {
   #nextLobbyId = 1;
   #nextBotId = 1;
 
-  public constructor(random: () => number = Math.random) {
+  public constructor(random: () => number = secureRandom) {
     this.#random = random;
   }
 
@@ -112,15 +114,20 @@ export class LobbyService {
 
   public dispatch(lobbyId: string, userId: string, request: PlayerActionRequest): DispatchResult {
     const lobby = this.requireActiveLobby(lobbyId);
+    this.advanceExpiredTurn(lobby);
     const player = this.requireHumanPlayer(lobby, userId);
+    const turnBefore = lobby.game.viewFor(player).turnNumber;
     const response = lobby.game.dispatch(player, request);
     if (response.result.ok) this.advanceBots(lobby);
+    if (response.result.ok && lobby.status === "PLAYING" && lobby.game.viewFor(player).turnNumber !== turnBefore) this.resetTurnDeadline(lobby);
     if (lobby.game.viewFor(player).phase === "GAME_OVER") lobby.status = "FINISHED";
     return { result: response.result, view: lobby.game.viewFor(player) };
   }
 
   public getLobby(lobbyId: string, userId: string): LobbySnapshot {
-    return this.snapshot(this.requireLobby(lobbyId), userId);
+    const lobby = this.requireLobby(lobbyId);
+    if (lobby.status === "PLAYING" && lobby.game) this.advanceExpiredTurn(lobby as LobbyRecord & { game: AuthoritativeGame });
+    return this.snapshot(lobby, userId);
   }
 
   private createLobby(
@@ -150,7 +157,8 @@ export class LobbyService {
       visibility,
       status: "WAITING",
       hostUserId: userId,
-      settings: { maxPlayers, turnTimeLimitMs: settings.turnTimeLimitMs ?? 60_000 },
+      settings: { maxPlayers, turnTimeLimitMs: settings.turnTimeLimitMs === undefined ? 60_000 : settings.turnTimeLimitMs },
+      turnDeadlineAt: null,
       seats: [{ userId, displayName, isBot: false }],
       game: null,
     };
@@ -175,6 +183,7 @@ export class LobbyService {
     });
     lobby.status = "PLAYING";
     this.advanceBots(lobby);
+    this.resetTurnDeadline(lobby);
   }
 
   private requireLobby(lobbyId: string): LobbyRecord {
@@ -217,6 +226,29 @@ export class LobbyService {
     throw new Error("Bot advancement exceeded its safety limit.");
   }
 
+  private advanceExpiredTurn(lobby: LobbyRecord & { game: AuthoritativeGame }): void {
+    if (lobby.turnDeadlineAt === null || Date.now() < lobby.turnDeadlineAt) return;
+    const expiredPlayer = lobby.game.viewFor(0).currentTurn;
+    for (let step = 0; step < 100; step++) {
+      const view = lobby.game.viewFor(expiredPlayer);
+      if (view.phase === "GAME_OVER" || view.currentTurn !== expiredPlayer) break;
+      const action = chooseBotAction(view);
+      if (!action) throw new Error("The timed-out turn could not be completed automatically.");
+      const request = Object.fromEntries(Object.entries(action).filter(([key]) => key !== "player")) as PlayerActionRequest;
+      const response = lobby.game.dispatch(expiredPlayer, request);
+      if (!response.result.ok) throw new Error(`Timed-out action failed: ${response.result.error}`);
+    }
+    this.advanceBots(lobby);
+    if (lobby.game.viewFor(0).phase === "GAME_OVER") lobby.status = "FINISHED";
+    this.resetTurnDeadline(lobby);
+  }
+
+  private resetTurnDeadline(lobby: LobbyRecord): void {
+    lobby.turnDeadlineAt = lobby.status === "PLAYING" && lobby.settings.turnTimeLimitMs !== null
+      ? Date.now() + lobby.settings.turnTimeLimitMs
+      : null;
+  }
+
   private snapshot(lobby: LobbyRecord, userId: string): LobbySnapshot {
     const player = lobby.seats.findIndex((seat) => seat.userId === userId);
     if (player < 0) throw new Error("This user is not in the lobby.");
@@ -228,6 +260,7 @@ export class LobbyService {
       status: lobby.status,
       hostUserId: lobby.hostUserId,
       settings: { ...lobby.settings },
+      turnDeadlineAt: lobby.turnDeadlineAt,
       seats: structuredClone(lobby.seats),
       game: lobby.game ? lobby.game.viewFor(player) : null,
     };

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Rank, Suit } from "./card";
 import { GroupValidator } from "./groupValidator";
 import { validateStateInvariants } from "./invariants";
@@ -508,5 +508,31 @@ describe("multiplayer authority and hidden information", () => {
     expect(service.dispatch(created.id, "host", { type: "PASS_ACTION" }).result).toEqual({ ok: true });
     expect(service.getLobby(created.id, "host").game?.phase).toBe("DISCARD");
     expect(service.resetTurnActions(created.id, "host").game?.phase).toBe("ACTION");
+  });
+
+  it("stores optional turn limits and automatically completes an expired turn", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      const service = new LobbyService(() => 0);
+      const created = service.createPrivateLobby("host", "Host", { maxPlayers: 2, turnTimeLimitMs: 30_000 });
+      service.joinPrivateLobby(created.inviteCode, "friend", "Friend");
+      const started = service.start(created.id, "host");
+      expect(started.settings.turnTimeLimitMs).toBe(30_000);
+      expect(started.turnDeadlineAt).toBe(Date.now() + 30_000);
+      expect(started.game?.currentTurn).toBe(0);
+
+      vi.advanceTimersByTime(30_001);
+      const advanced = service.getLobby(created.id, "host");
+      expect(advanced.game?.currentTurn).toBe(1);
+      expect(advanced.game?.turnNumber).toBe(2);
+      expect(advanced.turnDeadlineAt).toBe(Date.now() + 30_000);
+
+      const untimed = new LobbyService(() => 0.5).createPrivateLobby("other", "Other", { maxPlayers: 2, turnTimeLimitMs: null });
+      expect(untimed.settings.turnTimeLimitMs).toBeNull();
+      expect(untimed.turnDeadlineAt).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

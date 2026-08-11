@@ -39,10 +39,11 @@ Implemented:
 - Collapsible history and rules panels that stay outside the play surface
 - Burn notification/animation, public event history, player counts, and open/closed status
 - Plain-language invalid-action messages and a rules quick reference
+- Private-room create/join UI, invite links, live lobby seats, and a synchronized friend-game table
 
 ## Multiplayer foundation
 
-Implemented but not yet connected to a deployed network transport:
+Implemented with a local development HTTP adapter, but not yet connected to a deployed production transport:
 
 - Per-player projections that exclude the draw pile and opponents' hands
 - An authoritative boundary that derives player identity from the authenticated caller
@@ -51,13 +52,15 @@ Implemented but not yet connected to a deployed network transport:
 - Transactional action drafts that remain private until final discard
 - A typed client/server message contract for an HTTP or WebSocket adapter
 - Configurable turn duration represented in lobby and game state
+- Cross-tab private-room polling and authoritative friend-game actions
+- Per-tab room identity restoration across refreshes without changing shared invite URLs
 
 ## Remaining production work
 
 These are product/infrastructure tasks, not missing game-rule logic:
 
 1. Select a hosting and identity strategy, then add the HTTP/WebSocket adapter around `LobbyService`.
-2. Add online lobby/matchmaking screens and reconnect handling.
+2. Add online matchmaking and production-grade reconnect handling.
 3. Enforce turn deadlines server-side and define the timeout action policy.
 4. Add persistence/observability if games must survive a server restart.
 5. Add end-to-end tests against the selected network transport.

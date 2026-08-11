@@ -33,7 +33,9 @@ npm run build
 Implemented:
 
 - Local games against bots with 2–4 players
-- Home, bot-count setup, future online/friend entrances, and settings navigation
+- Home, bot-count setup, online entrance, friend rooms, and settings navigation
+- Private friend rooms with invite links, live seats, host controls, and synchronized authoritative turns
+- Tab-scoped friend-session restoration across refreshes and Settings navigation
 - Sets, runs, low/high Ace handling, and explicit Joker identities
 - Dynamically derived Ace placement when runs are extended
 - Multi-meld 51-point openings
@@ -52,7 +54,7 @@ Implemented:
 Not yet implemented:
 
 - A deployed HTTP/WebSocket transport, authentication, and persistence
-- Online and friend setup screens wired to the transport-independent lobby service
+- Online matchmaking screen wired to the transport-independent lobby service
 - Turn-timer enforcement (the configured duration is already represented in state)
 
 The detailed implementation audit and remaining production work are tracked in [`docs/IMPLEMENTATION_STATUS.md`](./docs/IMPLEMENTATION_STATUS.md).

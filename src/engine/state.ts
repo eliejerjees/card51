@@ -1,5 +1,5 @@
 import type { Action, MeldInput, MeldProposal } from "./actions";
-import { makeShuffledDeck, shuffleInPlace } from "./deckFactory";
+import { makeShuffledDeck, secureRandom, shuffleInPlace } from "./deckFactory";
 import { GroupValidator } from "./groupValidator";
 import { validateStateInvariants } from "./invariants";
 import { canTakeDiscardForOpening } from "./opening";
@@ -102,7 +102,7 @@ export function initGame(
   if (!Number.isInteger(numPlayers) || numPlayers < 2 || numPlayers > 4) {
     throw new Error("Card51 currently supports two to four players.");
   }
-  const random = options.random ?? Math.random;
+  const random = options.random ?? secureRandom;
   const deck = makeShuffledDeck(random);
   const cardsById = Object.fromEntries(deck.map((card) => [card.id, card]));
   const playersPublic: GameState["playersPublic"] = {};

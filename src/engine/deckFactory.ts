@@ -1,7 +1,14 @@
 import type { CardDTO } from "./types";
 import { Rank, STANDARD_RANKS, STANDARD_SUITS, Suit } from "./card";
 
-export function shuffleInPlace<T>(arr: T[], random: () => number = Math.random): void {
+/** A uniform random fraction backed by the platform's cryptographic RNG. */
+export function secureRandom(): number {
+  const value = new Uint32Array(1);
+  globalThis.crypto.getRandomValues(value);
+  return value[0] / 0x1_0000_0000;
+}
+
+export function shuffleInPlace<T>(arr: T[], random: () => number = secureRandom): void {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(random() * (i + 1));
     [arr[i], arr[j]] = [arr[j], arr[i]];
@@ -9,7 +16,7 @@ export function shuffleInPlace<T>(arr: T[], random: () => number = Math.random):
 }
 
 // Matches your Java: 2 decks of normal cards, plus 2 jokers total
-export function makeShuffledDeck(random: () => number = Math.random): CardDTO[] {
+export function makeShuffledDeck(random: () => number = secureRandom): CardDTO[] {
   const out: CardDTO[] = [];
 
   for (let d = 0; d < 2; d++) {

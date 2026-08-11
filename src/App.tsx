@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type DragEvent as ReactDragEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type ReactNode } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -18,8 +18,11 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import "./App.css";
+import { BotGame, type BotGameSession } from "./BotGame";
+import { FriendsGame } from "./FriendsGame";
 import { Rank } from "./engine/card";
 import type { Action, MeldProposal } from "./engine/actions";
+import { AuthoritativeGame } from "./engine/authority";
 import { chooseBotAction } from "./engine/bot";
 import { GroupValidator, calculateMeldValue } from "./engine/groupValidator";
 import { findMeldCandidates } from "./engine/meldFinder";
@@ -34,6 +37,43 @@ import { cardAssetPath, cardBackAssetPath } from "./ui/cardAssets";
 const HUMAN_ID = 0;
 type AppScreen = "HOME" | "BOTS" | "ONLINE" | "FRIENDS" | "SETTINGS" | "GAME";
 type FriendsStep = "CHOICE" | "CREATE" | "JOIN" | "LOBBY";
+type StoredFriendSession = { userId: string; displayName: string; lobbyId: string; inviteCode: string };
+const FRIEND_SESSION_BASE_KEY = "card51.friend-session.v1";
+const TAB_NAME_PREFIX = "card51-tab:";
+const TURN_TIME_OPTIONS = [
+  { value: null, label: "No time limit" },
+  { value: 30_000, label: "30 seconds" },
+  { value: 60_000, label: "1 minute" },
+  { value: 90_000, label: "1 minute 30 seconds" },
+  { value: 120_000, label: "2 minutes" },
+] as const;
+
+function friendSessionKey(): string {
+  if (!window.name.startsWith(TAB_NAME_PREFIX)) window.name = `${TAB_NAME_PREFIX}${crypto.randomUUID()}`;
+  return `${FRIEND_SESSION_BASE_KEY}:${window.name.slice(TAB_NAME_PREFIX.length)}`;
+}
+
+const FRIEND_SESSION_KEY = friendSessionKey();
+
+function readFriendSession(): StoredFriendSession | null {
+  try {
+    const raw = window.sessionStorage.getItem(FRIEND_SESSION_KEY);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<StoredFriendSession>;
+    if (!value.userId || !value.displayName || !value.lobbyId || !value.inviteCode) return null;
+    return value as StoredFriendSession;
+  } catch {
+    return null;
+  }
+}
+
+function writeFriendSession(session: StoredFriendSession): void {
+  window.sessionStorage.setItem(FRIEND_SESSION_KEY, JSON.stringify(session));
+}
+
+function clearFriendSession(): void {
+  window.sessionStorage.removeItem(FRIEND_SESSION_KEY);
+}
 
 type TableMotion = {
   key: number;
@@ -254,18 +294,25 @@ function MeldView({
 }
 
 function App() {
-  const [screen, setScreen] = useState<AppScreen>("HOME");
+  const [initialFriendSession] = useState<StoredFriendSession | null>(() => readFriendSession());
+  const initialInviteCode = new URLSearchParams(window.location.search).get("lobby")?.toUpperCase() ?? "";
+  const [screen, setScreen] = useState<AppScreen>(initialFriendSession || initialInviteCode ? "FRIENDS" : "HOME");
+  const [settingsReturnScreen, setSettingsReturnScreen] = useState<AppScreen>("HOME");
   const [botCount, setBotCount] = useState(1);
-  const [friendsStep, setFriendsStep] = useState<FriendsStep>("CHOICE");
-  const [friendUserId] = useState(() => crypto.randomUUID());
-  const [friendName, setFriendName] = useState("");
-  const [friendCode, setFriendCode] = useState("");
+  const [friendsStep, setFriendsStep] = useState<FriendsStep>(initialFriendSession ? "LOBBY" : initialInviteCode ? "JOIN" : "CHOICE");
+  const [friendUserId] = useState(() => initialFriendSession?.userId ?? crypto.randomUUID());
+  const [friendName, setFriendName] = useState(initialFriendSession?.displayName ?? "");
+  const [friendCode, setFriendCode] = useState(initialFriendSession?.inviteCode ?? initialInviteCode);
   const [friendMaxPlayers, setFriendMaxPlayers] = useState<2 | 3 | 4>(4);
+  const [friendTurnTimeLimitMs, setFriendTurnTimeLimitMs] = useState<number | null>(60_000);
+  const friendTurnPickerRef = useRef<HTMLDetailsElement>(null);
   const [friendLobby, setFriendLobby] = useState<LobbySnapshot | null>(null);
   const [friendBusy, setFriendBusy] = useState(false);
   const [friendError, setFriendError] = useState("");
+  const [friendRestoring, setFriendRestoring] = useState(Boolean(initialFriendSession));
   const [inviteCopied, setInviteCopied] = useState(false);
   const [numPlayers, setNumPlayers] = useState(2);
+  const botGameSession = useRef<BotGameSession>({ authority: new AuthoritativeGame(2) });
   const [gameState, setGameState] = useState<GameState>(() => initGame(2));
   const [selectedIds, setSelectedIds] = useState<Set<CardID>>(new Set());
   const [draftGroups, setDraftGroups] = useState<MeldProposal[]>([]);
@@ -290,6 +337,26 @@ function App() {
   const sensors = useSensors(
     useSensor(TouchSensor, { activationConstraint: { delay: 160, tolerance: 8 } }),
   );
+  const friendLobbyId = friendLobby?.id;
+
+  useEffect(() => {
+    const closeTurnPicker = (event: PointerEvent | KeyboardEvent) => {
+      const picker = friendTurnPickerRef.current;
+      if (!picker?.open) return;
+      if (event instanceof KeyboardEvent && event.key === "Escape") {
+        picker.removeAttribute("open");
+        picker.querySelector("summary")?.focus();
+        return;
+      }
+      if (event instanceof PointerEvent && event.target instanceof Node && !picker.contains(event.target)) picker.removeAttribute("open");
+    };
+    document.addEventListener("pointerdown", closeTurnPicker);
+    document.addEventListener("keydown", closeTurnPicker);
+    return () => {
+      document.removeEventListener("pointerdown", closeTurnPicker);
+      document.removeEventListener("keydown", closeTurnPicker);
+    };
+  }, []);
 
   const humanHand = gameState.playersPrivate[HUMAN_ID].hand;
   const selection = useMemo(() => [...selectedIds], [selectedIds]);
@@ -382,11 +449,35 @@ function App() {
   }, [recentDrawId]);
 
   useEffect(() => {
-    if (screen !== "FRIENDS" || !friendLobby) return;
+    if (!initialFriendSession) return;
+    let active = true;
+    getFriendLobby(initialFriendSession.lobbyId, initialFriendSession.userId)
+      .then((lobby) => {
+        if (!active) return;
+        setFriendLobby(lobby);
+        setFriendCode(lobby.inviteCode);
+        setFriendsStep("LOBBY");
+        setFriendError("");
+      })
+      .catch((restoreError: unknown) => {
+        if (!active) return;
+        clearFriendSession();
+        setFriendLobby(null);
+        setFriendsStep("JOIN");
+        setFriendError(restoreError instanceof Error ? `${restoreError.message} Re-enter the invite code to join again.` : "The saved room could not be restored.");
+      })
+      .finally(() => {
+        if (active) setFriendRestoring(false);
+      });
+    return () => { active = false; };
+  }, [initialFriendSession]);
+
+  useEffect(() => {
+    if (screen !== "FRIENDS" || !friendLobbyId) return;
     let active = true;
     const refresh = async (): Promise<void> => {
       try {
-        const lobby = await getFriendLobby(friendLobby.id, friendUserId);
+        const lobby = await getFriendLobby(friendLobbyId, friendUserId);
         if (active) {
           setFriendLobby(lobby);
           setFriendError("");
@@ -400,7 +491,7 @@ function App() {
       active = false;
       window.clearInterval(timer);
     };
-  }, [friendLobby, friendUserId, screen]);
+  }, [friendLobbyId, friendUserId, screen]);
 
   useEffect(() => {
     if (!activeDragId) return;
@@ -634,6 +725,7 @@ function App() {
     const players = botCount + 1;
     const next = initGame(players);
     setNumPlayers(players);
+    botGameSession.current.authority = new AuthoritativeGame(players);
     setGameState(next);
     setManualOrder(next.playersPrivate[HUMAN_ID].hand);
     setSortMode("rank");
@@ -649,7 +741,113 @@ function App() {
     setActiveDragId(null);
     setDragOverId(null);
     setTableMotion(null);
+    setFriendLobby(null);
+    setFriendsStep("CHOICE");
+    setFriendError("");
+    clearFriendSession();
+    window.history.replaceState({}, "", window.location.pathname);
     setScreen("HOME");
+  }
+
+  function openSettings(): void {
+    if (screen === "SETTINGS") return;
+    setSettingsReturnScreen(screen);
+    setScreen("SETTINGS");
+  }
+
+  function goBackFromSetup(): void {
+    if (screen === "SETTINGS") {
+      setScreen(settingsReturnScreen);
+      return;
+    }
+    if (screen === "FRIENDS" && friendsStep === "LOBBY") {
+      leaveFriendsRoom();
+      return;
+    }
+    if (screen === "FRIENDS" && friendsStep !== "CHOICE") {
+      setFriendsStep("CHOICE");
+      setFriendError("");
+      window.history.replaceState({}, "", window.location.pathname);
+      return;
+    }
+    returnHome();
+  }
+
+  async function createFriendsRoom(event: FormEvent): Promise<void> {
+    event.preventDefault();
+    setFriendBusy(true);
+    setFriendError("");
+    try {
+      const lobby = await createFriendLobby(friendUserId, friendName, friendMaxPlayers, friendTurnTimeLimitMs);
+      setFriendLobby(lobby);
+      setFriendCode(lobby.inviteCode);
+      setFriendsStep("LOBBY");
+      writeFriendSession({ userId: friendUserId, displayName: friendName.trim(), lobbyId: lobby.id, inviteCode: lobby.inviteCode });
+      window.history.replaceState({}, "", lobby.invitePath);
+    } catch (requestError) {
+      setFriendError(requestError instanceof Error ? requestError.message : "Could not create the room.");
+    } finally {
+      setFriendBusy(false);
+    }
+  }
+
+  async function joinFriendsRoom(event: FormEvent): Promise<void> {
+    event.preventDefault();
+    setFriendBusy(true);
+    setFriendError("");
+    try {
+      const lobby = await joinFriendLobby(friendUserId, friendName, friendCode);
+      setFriendLobby(lobby);
+      setFriendCode(lobby.inviteCode);
+      setFriendsStep("LOBBY");
+      writeFriendSession({ userId: friendUserId, displayName: friendName.trim(), lobbyId: lobby.id, inviteCode: lobby.inviteCode });
+      window.history.replaceState({}, "", lobby.invitePath);
+    } catch (requestError) {
+      setFriendError(requestError instanceof Error ? requestError.message : "Could not join the room.");
+    } finally {
+      setFriendBusy(false);
+    }
+  }
+
+  async function addBotToFriendsRoom(): Promise<void> {
+    if (!friendLobby) return;
+    setFriendBusy(true);
+    setFriendError("");
+    try {
+      setFriendLobby(await addFriendLobbyBot(friendLobby.id, friendUserId));
+    } catch (requestError) {
+      setFriendError(requestError instanceof Error ? requestError.message : "Could not add a bot.");
+    } finally {
+      setFriendBusy(false);
+    }
+  }
+
+  async function startFriendsRoom(): Promise<void> {
+    if (!friendLobby) return;
+    setFriendBusy(true);
+    setFriendError("");
+    try {
+      setFriendLobby(await startFriendLobby(friendLobby.id, friendUserId));
+    } catch (requestError) {
+      setFriendError(requestError instanceof Error ? requestError.message : "Could not start the game.");
+    } finally {
+      setFriendBusy(false);
+    }
+  }
+
+  async function copyFriendsInvite(): Promise<void> {
+    if (!friendLobby) return;
+    await navigator.clipboard.writeText(`${window.location.origin}${friendLobby.invitePath}`);
+    setInviteCopied(true);
+    window.setTimeout(() => setInviteCopied(false), 1_600);
+  }
+
+  function leaveFriendsRoom(): void {
+    setFriendLobby(null);
+    setFriendError("");
+    setFriendsStep("CHOICE");
+    clearFriendSession();
+    window.history.replaceState({}, "", window.location.pathname);
   }
 
   function resetTurnActions(): void {
@@ -676,15 +874,23 @@ function App() {
     || JSON.stringify(gameState.tableMelds) !== JSON.stringify(turnBaseline.tableMelds)
   ));
 
-  if (screen !== "GAME") {
+  if (screen === "FRIENDS" && friendLobby?.status === "PLAYING") {
+    return <FriendsGame lobby={friendLobby} userId={friendUserId} onLobby={setFriendLobby} onLeave={returnHome} onSettings={openSettings} />;
+  }
+
+  if (screen === "GAME") {
+    return <BotGame numPlayers={numPlayers} session={botGameSession.current} onSessionChange={(authority) => { botGameSession.current.authority = authority; }} onLeave={returnHome} onSettings={openSettings} />;
+  }
+
+  if (["HOME", "BOTS", "ONLINE", "FRIENDS", "SETTINGS"].includes(screen)) {
     return (
       <main className="home-shell">
         <header className="home-nav">
-          <button type="button" className="home-brand" onClick={() => setScreen("HOME")} aria-label="Card51 home">
+          <button type="button" className="home-brand" onClick={returnHome} aria-label="Card51 home">
             <span>51</span>
             <strong>Card51</strong>
           </button>
-          <button type="button" className="settings-button" onClick={() => setScreen("SETTINGS")} aria-label="Open settings">
+          <button type="button" className="settings-button" onClick={openSettings} aria-label="Open settings">
             <span aria-hidden="true">⚙</span> Settings
           </button>
         </header>
@@ -724,7 +930,7 @@ function App() {
           </div>
         ) : (
           <section className="setup-shell">
-            <button type="button" className="back-button" onClick={() => setScreen("HOME")}>← Back</button>
+            <button type="button" className="back-button" onClick={goBackFromSetup}>← Back</button>
 
             {screen === "BOTS" && (
               <div className="setup-card bot-setup">
@@ -761,16 +967,93 @@ function App() {
             )}
 
             {screen === "FRIENDS" && (
-              <div className="setup-card future-mode">
+              <div className={`setup-card friends-setup friends-${friendsStep.toLowerCase()} ${friendLobby?.status === "PLAYING" ? "friends-playing" : ""}`}>
                 <div className="setup-icon" aria-hidden="true">♣</div>
                 <p className="eyebrow">Private table</p>
-                <h1>Play with friends</h1>
-                <p>Private rooms and invite codes are planned for this entrance. Once connected, this is where you will create a table or join a friend.</p>
-                <div className="friend-actions">
-                  <button type="button" disabled>Create a room</button>
-                  <button type="button" disabled>Join with a code</button>
-                </div>
-                <div className="future-status"><span>Friend lobbies</span><strong>Coming next</strong></div>
+                {friendsStep === "CHOICE" && (
+                  <>
+                    <h1>Play with friends</h1>
+                    <p>Create a private Card51 room or enter the six-character code from a friend.</p>
+                    <div className="friend-choice-grid">
+                      <button type="button" onClick={() => setFriendsStep("CREATE")}><strong>Create a room</strong><span>Host a new private table</span></button>
+                      <button type="button" onClick={() => setFriendsStep("JOIN")}><strong>Join a room</strong><span>Use a friend's invite code</span></button>
+                    </div>
+                  </>
+                )}
+
+                {friendsStep === "CREATE" && (
+                  <form className="friend-form" onSubmit={createFriendsRoom}>
+                    <h1>Create a room</h1>
+                    <p>Choose the name your friends will see and the table rules.</p>
+                    <label>Display name<input required maxLength={24} autoComplete="nickname" value={friendName} onChange={(event) => setFriendName(event.target.value)} placeholder="Your name" /></label>
+                    <fieldset className="friend-size-picker">
+                      <legend>Seats at the table</legend>
+                      {([2, 3, 4] as const).map((count) => <button key={count} type="button" aria-pressed={friendMaxPlayers === count} onClick={() => setFriendMaxPlayers(count)}>{count}</button>)}
+                    </fieldset>
+                    <fieldset className="turn-time-field">
+                      <legend>Turn time</legend>
+                      <details ref={friendTurnPickerRef} className="turn-time-picker">
+                        <summary>{TURN_TIME_OPTIONS.find((option) => option.value === friendTurnTimeLimitMs)?.label ?? "Choose a turn time"}<span aria-hidden="true" /></summary>
+                        <div className="turn-time-options" role="listbox" aria-label="Turn time">
+                          {TURN_TIME_OPTIONS.map((option) => <button key={option.label} type="button" role="option" aria-selected={option.value === friendTurnTimeLimitMs} onClick={() => { setFriendTurnTimeLimitMs(option.value); friendTurnPickerRef.current?.removeAttribute("open"); }}><span>{option.label}</span>{option.value === friendTurnTimeLimitMs && <i aria-hidden="true">✓</i>}</button>)}
+                        </div>
+                      </details>
+                    </fieldset>
+                    {friendError && <p className="friend-error" role="alert">{friendError}</p>}
+                    <button type="submit" className="gold-button start-game-button" disabled={friendBusy}>{friendBusy ? "Creating…" : "Create private room"}</button>
+                  </form>
+                )}
+
+                {friendsStep === "JOIN" && (
+                  <form className="friend-form" onSubmit={joinFriendsRoom}>
+                    <h1>Join a room</h1>
+                    <p>Enter your name and the invite code shared by the host.</p>
+                    <label>Display name<input required maxLength={24} autoComplete="nickname" value={friendName} onChange={(event) => setFriendName(event.target.value)} placeholder="Your name" /></label>
+                    <label>Invite code<input required minLength={6} maxLength={6} autoCapitalize="characters" autoComplete="off" value={friendCode} onChange={(event) => setFriendCode(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))} placeholder="ABC123" className="invite-code-input" /></label>
+                    {friendError && <p className="friend-error" role="alert">{friendError}</p>}
+                    <button type="submit" className="gold-button start-game-button" disabled={friendBusy}>{friendBusy ? "Joining…" : "Join private room"}</button>
+                  </form>
+                )}
+
+                {friendsStep === "LOBBY" && !friendLobby && (
+                  <div className="friend-restoring" role="status"><h1>Rejoining room</h1><p>{friendRestoring ? "Restoring your seat and current game…" : "The room could not be restored."}</p></div>
+                )}
+
+                {friendsStep === "LOBBY" && friendLobby && (() => {
+                  if (friendLobby.status === "PLAYING") return <FriendsGame lobby={friendLobby} userId={friendUserId} onLobby={setFriendLobby} onLeave={returnHome} onSettings={openSettings} />;
+                  const isHost = friendLobby.hostUserId === friendUserId;
+                  const canStart = isHost && friendLobby.seats.length >= 2;
+                  return (
+                    <div className="friend-lobby">
+                      <h1>{friendLobby.status === "WAITING" ? "Your room" : "Game started"}</h1>
+                      <div className="invite-panel">
+                        <span>Invite code</span>
+                        <strong>{friendLobby.inviteCode}</strong>
+                        <button type="button" onClick={copyFriendsInvite}>{inviteCopied ? "Copied!" : "Copy invite link"}</button>
+                      </div>
+                      <div className="lobby-rule"><span>Turn time</span><strong>{friendLobby.settings.turnTimeLimitMs === null ? "No limit" : `${friendLobby.settings.turnTimeLimitMs / 1000} seconds`}</strong></div>
+                      <div className="lobby-heading"><span>Players</span><strong>{friendLobby.seats.length} / {friendLobby.settings.maxPlayers}</strong></div>
+                      <div className="lobby-seats">
+                        {Array.from({ length: friendLobby.settings.maxPlayers }, (_, index) => {
+                          const seat = friendLobby.seats[index];
+                          return seat ? (
+                            <div className="lobby-seat filled" key={seat.userId}>
+                              <span>{seat.isBot ? "B" : seat.displayName.slice(0, 1).toUpperCase()}</span>
+                              <div><strong>{seat.displayName}</strong><small>{seat.userId === friendLobby.hostUserId ? "Host" : seat.isBot ? "Bot" : "Ready"}</small></div>
+                            </div>
+                          ) : <div className="lobby-seat empty" key={index}><span>+</span><div><strong>Open seat</strong><small>Waiting for a player</small></div></div>;
+                        })}
+                      </div>
+                      {friendError && <p className="friend-error" role="alert">{friendError}</p>}
+                      {isHost ? (
+                        <div className="lobby-controls">
+                          <button type="button" disabled={friendBusy || friendLobby.seats.length >= friendLobby.settings.maxPlayers} onClick={addBotToFriendsRoom}>Add bot</button>
+                          <button type="button" className="gold-button" disabled={friendBusy || !canStart} onClick={startFriendsRoom}>{friendBusy ? "Starting…" : "Start game"}</button>
+                        </div>
+                      ) : <p className="waiting-host">Waiting for the host to start the game…</p>}
+                    </div>
+                  );
+                })()}
               </div>
             )}
 
@@ -810,6 +1093,7 @@ function App() {
         </div>
         <div className="new-game-controls">
           <span className="session-mode">You vs {numPlayers - 1} {numPlayers === 2 ? "bot" : "bots"}</span>
+          <button type="button" onClick={openSettings}>Settings</button>
           <button type="button" onClick={returnHome}>Home</button>
           <button type="button" className="gold-button" onClick={newGame}>New game</button>
         </div>
