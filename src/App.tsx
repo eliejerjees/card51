@@ -781,10 +781,14 @@ function App() {
   }
 
   async function createFriendsRoom(): Promise<void> {
+    const displayName = friendName.trim();
+    if (!displayName) {
+      setFriendError("Enter the name you want other players to see.");
+      return;
+    }
     setFriendBusy(true);
     setFriendError("");
     try {
-      const displayName = friendName.trim() || "Host";
       const lobby = await createFriendLobby(friendUserId, displayName);
       setFriendName(displayName);
       setFriendLobby(lobby);
@@ -1009,8 +1013,9 @@ function App() {
                   <>
                     <h1>Play with friends</h1>
                     <p>Create a private Card51 room or enter the six-character code from a friend.</p>
+                    <label className="friend-choice-name">Display name<input required maxLength={24} autoComplete="nickname" value={friendName} onChange={(event) => setFriendName(event.target.value)} placeholder="Your name" /></label>
                     <div className="friend-choice-grid">
-                      <button type="button" disabled={friendBusy} onClick={() => createFriendsRoom()}><strong>{friendBusy ? "Creating…" : "Create a room"}</strong><span>Open a private table instantly</span></button>
+                      <button type="button" disabled={friendBusy || !friendName.trim()} onClick={() => createFriendsRoom()}><strong>{friendBusy ? "Creating…" : "Create a room"}</strong><span>Open a private table instantly</span></button>
                       <button type="button" onClick={() => setFriendsStep("JOIN")}><strong>Join a room</strong><span>Use a friend's invite code</span></button>
                     </div>
                     {friendError && <p className="friend-error" role="alert">{friendError}</p>}

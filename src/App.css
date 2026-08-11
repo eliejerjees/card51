@@ -137,6 +137,10 @@ h2 { margin-bottom: 0; font-size: 1rem; }
 .friend-choice-grid button { min-height: 105px; display: grid; place-content: center; gap: .35rem; padding: 1rem; border-radius: 16px; }
 .friend-choice-grid button strong { color: var(--gold-bright); font: 750 1.03rem/1.1 Georgia,serif; }
 .friend-choice-grid button span { color: var(--muted); font-size: .69rem; }
+.friend-choice-name { display: grid; gap: .35rem; margin-bottom: .75rem; color: var(--muted); font-size: .68rem; font-weight: 850; text-align: left; text-transform: uppercase; letter-spacing: .09em; }
+.friend-choice-name input { width: 100%; min-height: 48px; padding: .7rem .8rem; border: 1px solid rgba(255,255,255,.18); border-radius: 11px; color: var(--cream); background: #092c22; font: inherit; outline: none; text-transform: none; letter-spacing: normal; transition: border-color .15s ease,box-shadow .15s ease; }
+.friend-choice-name input:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(242,197,87,.13); }
+.friend-choice-name input::placeholder { color: rgba(184,200,191,.48); }
 .friend-form { display: grid; gap: .9rem; text-align: left; }
 .friend-form h1 { margin-bottom: 0; text-align: center; }
 .friend-form > p { margin: 0 auto .45rem; color: var(--muted); text-align: center; line-height: 1.5; }
