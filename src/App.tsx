@@ -27,9 +27,13 @@ import { canTakeDiscardForOpening } from "./engine/opening";
 import { createPlayerView } from "./engine/playerView";
 import { applyAction, initGame } from "./engine/state";
 import type { CardDTO, CardID, GameState, Meld } from "./engine/types";
+import { addFriendLobbyBot, createFriendLobby, getFriendLobby, joinFriendLobby, startFriendLobby } from "./online/friendsClient";
+import type { LobbySnapshot } from "./online/lobbyService";
 import { cardAssetPath, cardBackAssetPath } from "./ui/cardAssets";
 
 const HUMAN_ID = 0;
+type AppScreen = "HOME" | "BOTS" | "ONLINE" | "FRIENDS" | "SETTINGS" | "GAME";
+type FriendsStep = "CHOICE" | "CREATE" | "JOIN" | "LOBBY";
 
 type TableMotion = {
   key: number;
@@ -250,6 +254,17 @@ function MeldView({
 }
 
 function App() {
+  const [screen, setScreen] = useState<AppScreen>("HOME");
+  const [botCount, setBotCount] = useState(1);
+  const [friendsStep, setFriendsStep] = useState<FriendsStep>("CHOICE");
+  const [friendUserId] = useState(() => crypto.randomUUID());
+  const [friendName, setFriendName] = useState("");
+  const [friendCode, setFriendCode] = useState("");
+  const [friendMaxPlayers, setFriendMaxPlayers] = useState<2 | 3 | 4>(4);
+  const [friendLobby, setFriendLobby] = useState<LobbySnapshot | null>(null);
+  const [friendBusy, setFriendBusy] = useState(false);
+  const [friendError, setFriendError] = useState("");
+  const [inviteCopied, setInviteCopied] = useState(false);
   const [numPlayers, setNumPlayers] = useState(2);
   const [gameState, setGameState] = useState<GameState>(() => initGame(2));
   const [selectedIds, setSelectedIds] = useState<Set<CardID>>(new Set());
@@ -367,13 +382,34 @@ function App() {
   }, [recentDrawId]);
 
   useEffect(() => {
+    if (screen !== "FRIENDS" || !friendLobby) return;
+    let active = true;
+    const refresh = async (): Promise<void> => {
+      try {
+        const lobby = await getFriendLobby(friendLobby.id, friendUserId);
+        if (active) {
+          setFriendLobby(lobby);
+          setFriendError("");
+        }
+      } catch (pollError) {
+        if (active) setFriendError(pollError instanceof Error ? pollError.message : "Could not refresh the room.");
+      }
+    };
+    const timer = window.setInterval(refresh, 1_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [friendLobby, friendUserId, screen]);
+
+  useEffect(() => {
     if (!activeDragId) return;
     const safetyTimer = window.setTimeout(() => setActiveDragId(null), 10_000);
     return () => window.clearTimeout(safetyTimer);
   }, [activeDragId]);
 
   useEffect(() => {
-    if (gameState.phase === "GAME_OVER" || gameState.currentTurn === HUMAN_ID || activeDragId) return;
+    if (screen !== "GAME" || gameState.phase === "GAME_OVER" || gameState.currentTurn === HUMAN_ID || activeDragId) return;
     const action = chooseBotAction(createPlayerView(gameState, gameState.currentTurn));
     if (!action) {
       const failureTimer = window.setTimeout(
@@ -399,7 +435,7 @@ function App() {
       window.clearTimeout(motionTimer);
       window.clearTimeout(actionTimer);
     };
-  }, [activeDragId, createTableMotion, gameState]);
+  }, [activeDragId, createTableMotion, gameState, screen]);
 
   function clearSelections(): void {
     setSelectedIds(new Set());
@@ -594,6 +630,28 @@ function App() {
     setError("");
   }
 
+  function startBotGame(): void {
+    const players = botCount + 1;
+    const next = initGame(players);
+    setNumPlayers(players);
+    setGameState(next);
+    setManualOrder(next.playersPrivate[HUMAN_ID].hand);
+    setSortMode("rank");
+    setRecentDrawId(null);
+    setTurnBaseline(null);
+    setDraftGroups([]);
+    clearSelections();
+    setError("");
+    setScreen("GAME");
+  }
+
+  function returnHome(): void {
+    setActiveDragId(null);
+    setDragOverId(null);
+    setTableMotion(null);
+    setScreen("HOME");
+  }
+
   function resetTurnActions(): void {
     if (!turnBaseline) return;
     setGameState(cloneState(turnBaseline));
@@ -618,6 +676,124 @@ function App() {
     || JSON.stringify(gameState.tableMelds) !== JSON.stringify(turnBaseline.tableMelds)
   ));
 
+  if (screen !== "GAME") {
+    return (
+      <main className="home-shell">
+        <header className="home-nav">
+          <button type="button" className="home-brand" onClick={() => setScreen("HOME")} aria-label="Card51 home">
+            <span>51</span>
+            <strong>Card51</strong>
+          </button>
+          <button type="button" className="settings-button" onClick={() => setScreen("SETTINGS")} aria-label="Open settings">
+            <span aria-hidden="true">⚙</span> Settings
+          </button>
+        </header>
+
+        {screen === "HOME" ? (
+          <div className="home-content">
+            <section className="home-hero">
+              <div className="home-suits" aria-hidden="true"><i /><i /><i /><i /></div>
+              <p className="eyebrow">The family rummy game</p>
+              <h1>Card51</h1>
+              <p className="home-tagline">Build your hand. Open with 51. Be the first to make the final discard.</p>
+            </section>
+
+            <section className="mode-section" aria-labelledby="choose-game-mode">
+              <div className="home-section-heading">
+                <div><p className="eyebrow">Take a seat</p><h2 id="choose-game-mode">How do you want to play?</h2></div>
+                <span>2–4 players</span>
+              </div>
+              <div className="mode-grid">
+                <button type="button" className="mode-card mode-online" onClick={() => setScreen("ONLINE")}>
+                  <span className="mode-icon" aria-hidden="true">◎</span>
+                  <span className="mode-copy"><small>Quick match</small><strong>Play online</strong><span>Find a table and play against other Card51 players.</span></span>
+                  <span className="mode-arrow" aria-hidden="true">→</span>
+                </button>
+                <button type="button" className="mode-card mode-friends" onClick={() => setScreen("FRIENDS")}>
+                  <span className="mode-icon" aria-hidden="true">♣</span>
+                  <span className="mode-copy"><small>Private table</small><strong>Play with friends</strong><span>Create a room or join one with an invite code.</span></span>
+                  <span className="mode-arrow" aria-hidden="true">→</span>
+                </button>
+                <button type="button" className="mode-card mode-bots" onClick={() => setScreen("BOTS")}>
+                  <span className="mode-icon" aria-hidden="true">◆</span>
+                  <span className="mode-copy"><small>Ready now</small><strong>Play against bots</strong><span>Choose your opponents and start immediately.</span></span>
+                  <span className="mode-arrow" aria-hidden="true">→</span>
+                </button>
+              </div>
+            </section>
+          </div>
+        ) : (
+          <section className="setup-shell">
+            <button type="button" className="back-button" onClick={() => setScreen("HOME")}>← Back</button>
+
+            {screen === "BOTS" && (
+              <div className="setup-card bot-setup">
+                <div className="setup-icon" aria-hidden="true">◆</div>
+                <p className="eyebrow">Solo table</p>
+                <h1>Play against bots</h1>
+                <p>Pick how many opponents you want at the table.</p>
+                <fieldset className="bot-picker">
+                  <legend>Number of bots</legend>
+                  {[1, 2, 3].map((count) => (
+                    <button key={count} type="button" aria-pressed={botCount === count} onClick={() => setBotCount(count)}>
+                      <strong>{count}</strong><span>{count === 1 ? "Bot" : "Bots"}</span>
+                    </button>
+                  ))}
+                </fieldset>
+                <div className={`table-preview bots-${botCount}`} aria-label={`Table preview with you and ${botCount} ${botCount === 1 ? "bot" : "bots"}`}>
+                  <span className="preview-seat you">You</span>
+                  {Array.from({ length: botCount }, (_, index) => <span className={`preview-seat bot bot-${index + 1}`} key={index}>B{index + 1}</span>)}
+                  <i>51</i>
+                </div>
+                <button type="button" className="gold-button start-game-button" onClick={startBotGame}>Deal the cards</button>
+              </div>
+            )}
+
+            {screen === "ONLINE" && (
+              <div className="setup-card future-mode">
+                <div className="setup-icon" aria-hidden="true">◎</div>
+                <p className="eyebrow">Quick match</p>
+                <h1>Play online</h1>
+                <p>Matchmaking will connect you with an open Card51 table. The game rules and secure multiplayer foundation are ready; the live connection screen is next.</p>
+                <div className="future-status"><span>Online matchmaking</span><strong>Coming next</strong></div>
+                <button type="button" className="gold-button start-game-button" disabled>Find a game</button>
+              </div>
+            )}
+
+            {screen === "FRIENDS" && (
+              <div className="setup-card future-mode">
+                <div className="setup-icon" aria-hidden="true">♣</div>
+                <p className="eyebrow">Private table</p>
+                <h1>Play with friends</h1>
+                <p>Private rooms and invite codes are planned for this entrance. Once connected, this is where you will create a table or join a friend.</p>
+                <div className="friend-actions">
+                  <button type="button" disabled>Create a room</button>
+                  <button type="button" disabled>Join with a code</button>
+                </div>
+                <div className="future-status"><span>Friend lobbies</span><strong>Coming next</strong></div>
+              </div>
+            )}
+
+            {screen === "SETTINGS" && (
+              <div className="setup-card settings-setup">
+                <div className="setup-icon" aria-hidden="true">⚙</div>
+                <p className="eyebrow">Your game</p>
+                <h1>Settings</h1>
+                <p>This space is ready for the options we add next.</p>
+                <div className="settings-preview">
+                  <span><strong>Sound & music</strong><small>Coming later</small></span>
+                  <span><strong>Animation speed</strong><small>Coming later</small></span>
+                  <span><strong>Table appearance</strong><small>Coming later</small></span>
+                </div>
+              </div>
+            )}
+          </section>
+        )}
+        <footer className="home-footer"><span>Card51</span><span>Family rules, faithfully played.</span></footer>
+      </main>
+    );
+  }
+
   return (
     <DndContext
       sensors={sensors}
@@ -633,12 +809,8 @@ function App() {
           <h1>Card51</h1>
         </div>
         <div className="new-game-controls">
-          <label>
-            Players
-            <select value={numPlayers} onChange={(event) => setNumPlayers(Number(event.target.value))}>
-              <option value={2}>2</option><option value={3}>3</option><option value={4}>4</option>
-            </select>
-          </label>
+          <span className="session-mode">You vs {numPlayers - 1} {numPlayers === 2 ? "bot" : "bots"}</span>
+          <button type="button" onClick={returnHome}>Home</button>
           <button type="button" className="gold-button" onClick={newGame}>New game</button>
         </div>
       </header>
